@@ -3,12 +3,12 @@ package com.labsage.app.ui.theme
 import androidx.compose.ui.graphics.Color
 
 // ============================================================
-// Primary — Indigo palette
+// Primary — Teal palette
 // ============================================================
-val Primary = Color(0xFF4F46E5)
-val PrimaryDark = Color(0xFF3730A3)
-val PrimaryLight = Color(0xFFE0E7FF)
-val PrimaryContainer = Color(0xFFEEF2FF)
+val Primary = Color(0xFF0D9488)
+val PrimaryDark = Color(0xFF0F766E)
+val PrimaryLight = Color(0xFFCCFBF1)
+val PrimaryContainer = Color(0xFFF0FDFA)
 
 // ============================================================
 // Surface & Background
@@ -16,12 +16,11 @@ val PrimaryContainer = Color(0xFFEEF2FF)
 val Background = Color(0xFFF3F4F6)
 val Surface = Color(0xFFFFFFFF)
 val SurfaceVariant = Color(0xFFF9FAFB)
-val CardBackground = Color(0xFFFFFFFF)
 
 // ============================================================
 // Chat bubbles
 // ============================================================
-val UserBubble = Color(0xFF4F46E5)
+val UserBubble = Color(0xFF0D9488)
 val UserBubbleText = Color(0xFFFFFFFF)
 val AssistantBubble = Color(0xFFF3F4F6)
 val AssistantBubbleText = Color(0xFF111827)
@@ -38,7 +37,7 @@ val TextTertiary = Color(0xFF9CA3AF)
 // ============================================================
 val Error = Color(0xFFEF4444)
 val ErrorContainer = Color(0xFFFEE2E2)
-val Success = Color(0xFF10B981)
+val Success = Color(0xFF059669)
 val Warning = Color(0xFFF59E0B)
 
 // ============================================================
