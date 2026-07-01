@@ -8,9 +8,13 @@ import android.net.*
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -33,6 +37,7 @@ import com.labsage.app.LabSageApplication
 import com.labsage.app.domain.model.StreamState
 import com.labsage.app.ui.chat.components.*
 import com.labsage.app.ui.theme.*
+import com.labsage.app.ui.theme.Success
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -44,6 +49,7 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val streamState by viewModel.streamState.collectAsStateWithLifecycle()
     val traceLines by viewModel.traceLines.collectAsStateWithLifecycle()
+    val justCompleted by viewModel.justCompleted.collectAsStateWithLifecycle()
     val sessionContext by viewModel.sessionContext.collectAsStateWithLifecycle()
 
     var inputText by remember { mutableStateOf("") }
@@ -142,6 +148,25 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
                 }
                 if (isStreaming && messages.none { it.role == "assistant" && it.isPartial }) {
                     item { StreamingIndicator() }
+                }
+            }
+
+            if (justCompleted) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = justCompleted,
+                    enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.slideInVertically(),
+                    exit = androidx.compose.animation.fadeOut()
+                ) {
+                    Surface(
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(10.dp), color = Color(0xFFD1FAE5)
+                    ) {
+                        Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("✓", color = Success, style = MaterialTheme.typography.labelMedium)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Response complete", style = MaterialTheme.typography.labelSmall, color = Success)
+                        }
+                    }
                 }
             }
 

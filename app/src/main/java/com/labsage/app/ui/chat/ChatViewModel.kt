@@ -49,6 +49,10 @@ class ChatViewModel(
     private val _toolStats = MutableStateFlow<Map<String, Int>>(emptyMap())
     val toolStats: StateFlow<Map<String, Int>> = _toolStats.asStateFlow()
 
+    /** Brief completion indicator — true for 2s after Done event */
+    private val _justCompleted = MutableStateFlow(false)
+    val justCompleted: StateFlow<Boolean> = _justCompleted.asStateFlow()
+
     // ============================================================
     // Streaming accumulators
     // ============================================================
@@ -224,8 +228,11 @@ class ChatViewModel(
                     route = currentRoute,
                     toolStats = currentToolStats
                 )
-                // Clear trace display — answer is complete
                 _traceLines.value = emptyList()
+                // Show completion indicator briefly
+                _justCompleted.value = true
+                kotlinx.coroutines.delay(2500)
+                _justCompleted.value = false
             }
 
             is SseEvent.Error -> {
