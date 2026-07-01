@@ -141,6 +141,26 @@
 | 8 | REPLACE 触发 CASCADE | P0 | 逻辑错误 | ✅ 已修复 |
 | 9 | SSE 空消息不展示 | P1 | UI 缺失 | ✅ 已修复 |
 | 10 | 摘要对话框不关闭 | P2 | UI 逻辑 | ✅ 已修复 |
+| 11 | trySend 溢丢弃 message/done | P0 | 数据丢失 | ✅ 已修复 |
+
+---
+
+### 11. trySend 缓冲区溢出 — GPU/Conda 查询输出中断
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | 点击 GPU/Conda 查询按钮后，回复输出一部分就停止，UI 停留在 Streaming 状态，Done 事件不触发 |
+| **根因** | 工具查询时后端发送 200+ 条 SSE `trace` 事件（路由决策、工具调用状态、中间日志）。`callbackFlow` 默认 buffer = 64。`trySend()` 在 buffer 满后静默丢弃事件，导致后续的 `message` 和 `done` 事件被丢弃。`trySend` 返回 `ChannelResult.closed` 或 `ChannelResult.failure` 但未被检查 |
+| **验证** | `time curl /api/chat_stream` 返回 993 行 SSE 数据（~5 秒），`callbackFlow` buffer 只能容纳 64 个未消费事件 |
+| **修复** | 1. 在 `OkHttpSseDataSource.onEvent()` 中过滤 trace 事件：仅转发含"调用工具"/"调用完成"/"route="的行（工具生命周期），跳过原始 trace（路由细节、模型日志）。过滤后 ~200 → ~5 条<br>2. 保持 `trySend`（非阻塞，适配 `EventSourceListener` 回调语义）<br>3. `trace_summary` 事件补全 `toolStats` 用于内联展示 |
+| **设计决策** | |
+| 方案 | 评估 |
+| `send()` 替代 `trySend` | ❌ `send()` 是 suspend 函数，`EventSourceListener.onEvent()` 不是协程上下文，需要额外 `launch` |
+| 增大 buffer (`Channel.UNLIMITED`) | ❌ 993 条事件全部缓存 → 内存膨胀 + 消费延迟 |
+| **过滤 trace 事件** | ✅ 保留 ~5 条工具生命周期事件，丢弃 200+ 条噪音，buffer 安全 |
+| **影响文件** | `OkHttpSseDataSource.kt`，`ChatViewModel.kt`（更新 trace 处理） |
+
+| **面试考点**：`callbackFlow` vs `channelFlow` 的区别？`trySend` 的返回值含义？Channel 背压策略（SUSPEND/CONFLATED/BUFFERED/UNLIMITED）的选择？
 
 ---
 

@@ -330,3 +330,29 @@ fun InlineTraceSummary(traceLines: List<String>) {
 - SSE 流中消息可能为空的场景：工具调用等待、模型推理缓冲、网络延迟
 - 如何区分"卡死"和"工具执行中"：trace 事件是最可靠的信号（`[tool] 开始调用`、`[tool] 调用完成`）
 - 动画选择：`InfiniteTransition + animateFloat + repeat` vs `Animatable` → InfiniteTransition 更轻量，适合无交互纯展示动画
+
+---
+
+## 十、callbackFlow 背压与 trySend 陷阱（实战 Bug）
+
+### 问题
+`callbackFlow` 默认 buffer = 64。SSE 工具查询产生 200+ 条 trace 事件，`trySend()` 在 buffer 满后静默丢弃，包括后续的 `message` 和 `done` 事件，导致流式输出中断。
+
+### 修复：事件过滤
+```
+原始事件流: connected → trace×200 → message×50 → trace_summary → done
+过滤后:     connected → trace×5(工具生命周期) → message×50 → trace_summary → done
+```
+
+过滤逻辑：
+```kotlin
+if (event is SseEvent.Trace && !event.line.let { l ->
+    l.contains("调用工具") || l.contains("调用完成") || l.contains("route=")
+}) return  // 丢弃非关键的 trace
+```
+
+### 面试考点
+- `trySend` vs `send`：`trySend` 非阻塞、立即返回 `ChannelResult`，适合回调；`send` 挂起等待、保证交付，适合协程
+- Channel 容量策略：BUFFERED(64) / CONFLATED(1) / UNLIMITED 的选择场景
+- 为什么不用 `Channel.UNLIMITED`：993 条事件全部缓存 → 内存 GC 压力 + 消费者延迟
+- 为什么不在 `onEvent` 中 `launch { send() }`：增加协程创建开销，且顺序可能乱
