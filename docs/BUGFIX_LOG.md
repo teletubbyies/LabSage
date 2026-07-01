@@ -152,7 +152,7 @@
 | **现象** | 点击 GPU/Conda 查询按钮后，回复输出一部分就停止，UI 停留在 Streaming 状态，Done 事件不触发 |
 | **根因** | 工具查询时后端发送 200+ 条 SSE `trace` 事件（路由决策、工具调用状态、中间日志）。`callbackFlow` 默认 buffer = 64。`trySend()` 在 buffer 满后静默丢弃事件，导致后续的 `message` 和 `done` 事件被丢弃。`trySend` 返回 `ChannelResult.closed` 或 `ChannelResult.failure` 但未被检查 |
 | **验证** | `time curl /api/chat_stream` 返回 993 行 SSE 数据（~5 秒），`callbackFlow` buffer 只能容纳 64 个未消费事件 |
-| **修复** | 1. 在 `OkHttpSseDataSource.onEvent()` 中过滤 trace 事件：仅转发含"调用工具"/"调用完成"/"route="的行（工具生命周期），跳过原始 trace（路由细节、模型日志）。过滤后 ~200 → ~5 条<br>2. 保持 `trySend`（非阻塞，适配 `EventSourceListener` 回调语义）<br>3. `trace_summary` 事件补全 `toolStats` 用于内联展示 |
+| **修复** | **Phase 1 — 事件过滤**：`onEvent` 中仅转发工具生命周期 trace（"调用工具"/"调用完成"/"route="），~200 → ~3 条<br>**Phase 2 — 无限缓冲**：`callbackFlow { ... }.buffer(Channel.UNLIMITED)` 防止 238 条 message chunk + Room 写入延迟导致的 buffer 溢出<br>**Phase 3 — 批量写入**：Room `updateContent` 每 5 chunk 执行一次（减少磁盘 I/O），Done 时 `finalizeMessage` 保证最终内容写入 |
 | **设计决策** | |
 | 方案 | 评估 |
 | `send()` 替代 `trySend` | ❌ `send()` 是 suspend 函数，`EventSourceListener.onEvent()` 不是协程上下文，需要额外 `launch` |
