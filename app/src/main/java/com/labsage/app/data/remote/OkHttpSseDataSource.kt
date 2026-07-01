@@ -55,15 +55,18 @@ class OkHttpSseDataSource(
                 data: String
             ) {
                 val event = buildEvent(type, data) ?: return
-                // trySend can fail if channel is full; use send with timeout
+                // Filter trace events: only forward tool lifecycle lines (calling/completed).
+                // Raw queries generate 200+ trace lines; keeping all overflows the channel.
+                // Tool lifecycle events are ~3-5 per call — safe to forward.
+                if (event is SseEvent.Trace && !event.line.let { l ->
+                    l.contains("调用工具") || l.contains("调用完成") || l.contains("route=")
+                }) return
+                // trySend is safe after trace filtering: ~5 tool events + message chunks
+                // no longer risk buffer overflow from 200+ raw trace lines
                 trySend(event)
-                // IMPORTANT: don't close the channel here — let the collector see
-                // the Done/Error event first. The EventSource will call onClosed() next.
             }
 
             override fun onClosed(eventSource: EventSource) {
-                // Send a synthetic Done if the server closed normally without one
-                trySend(SseEvent.Done)
                 channel.close()
             }
 
@@ -75,7 +78,6 @@ class OkHttpSseDataSource(
                 eventSource.cancel()
                 val message = t?.message
                     ?: "SSE connection failed: HTTP ${response?.code}"
-                // Try to deliver the error event before closing
                 trySend(SseEvent.Error(message = message, retryable = true))
                 close(IOException(message))
             }

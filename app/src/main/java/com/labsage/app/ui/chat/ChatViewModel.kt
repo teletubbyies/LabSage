@@ -201,13 +201,18 @@ class ChatViewModel(
 
             is SseEvent.Trace -> {
                 accumulatedTraces.add(event.line)
-                _traceLines.value = accumulatedTraces.toList()
+                // Only keep last 5 traces for inline display (avoid flooding)
+                _traceLines.value = accumulatedTraces.takeLast(5)
             }
 
             is SseEvent.TraceSummary -> {
                 currentToolStats = event.toolStats.toMutableMap()
                 _toolStats.value = event.toolStats
-                // Extract route from trace lines if present
+                // Show tool execution status via traceLines (inline chip reads this)
+                if (event.toolStats.isNotEmpty()) {
+                    val toolNames = event.toolStats.keys.joinToString(", ")
+                    _traceLines.value = listOf("[tool] 调用完成 $toolNames")
+                }
                 currentRoute = accumulatedTraces
                     .find { it.startsWith("[route]") || it.contains("route") }
                     ?.let { line ->
