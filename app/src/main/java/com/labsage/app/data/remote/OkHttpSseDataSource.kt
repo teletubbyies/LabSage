@@ -2,8 +2,10 @@ package com.labsage.app.data.remote
 
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import okhttp3.MediaType.Companion.toMediaType
@@ -86,7 +88,9 @@ class OkHttpSseDataSource(
         awaitClose {
             eventSource.cancel()
         }
-    }.flowOn(Dispatchers.IO)
+    }
+        .buffer(Channel.UNLIMITED)  // prevent data loss with 240+ events on tool queries
+        .flowOn(Dispatchers.IO)
 
     // ============================================================
     // Event parsing

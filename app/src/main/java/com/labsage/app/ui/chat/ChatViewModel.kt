@@ -64,6 +64,7 @@ class ChatViewModel(
     private var currentToolStats = mutableMapOf<String, Int>()
     private var currentRoute: String? = null
     private var lastQuestion: String = ""
+    private var chunkCount = 0  // throttle Room writes
 
     init {
         // Observe Room messages for this conversation
@@ -97,6 +98,7 @@ class ChatViewModel(
             _toolStats.value = emptyMap()
             currentRoute = null
             streamingMessageId = null
+            chunkCount = 0
 
             // Open SSE stream
             streamingJob = viewModelScope.launch {
@@ -180,17 +182,18 @@ class ChatViewModel(
 
             is SseEvent.Message -> {
                 accumulatedAnswer.append(event.text)
+                chunkCount++
 
                 if (streamingMessageId == null) {
-                    // First chunk: create placeholder in Room
                     streamingMessageId = repository.saveAssistantMessage(
                         conversationId = conversationId,
                         content = accumulatedAnswer.toString(),
                         isPartial = true,
                         originalQuestion = lastQuestion
                     )
-                } else {
-                    // Subsequent chunks: update in-place
+                } else if (chunkCount % 5 == 0) {
+                    // Batch: write to Room every 5th chunk (reduces disk I/O
+                    // backpressure; final content always flushed on Done)
                     repository.updateAssistantMessage(
                         streamingMessageId!!,
                         accumulatedAnswer.toString(),
@@ -225,6 +228,7 @@ class ChatViewModel(
             is SseEvent.Done -> {
                 val finalAnswer = accumulatedAnswer.toString()
                 streamingMessageId?.let { id ->
+                    // Flush final content to Room (covers unbatch remainder)
                     repository.finalizeAssistantMessage(id, finalAnswer, currentRoute)
                 }
                 streamingMessageId = null
