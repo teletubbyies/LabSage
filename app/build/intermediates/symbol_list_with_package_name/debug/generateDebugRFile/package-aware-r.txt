@@ -1,0 +1,10 @@
+com.labsage.app
+color background
+color ic_launcher_background
+color on_primary
+color primary
+color primary_dark
+color surface
+drawable ic_launcher_foreground
+mipmap ic_launcher
+style Theme_LabSage

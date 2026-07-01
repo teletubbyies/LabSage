@@ -1,0 +1,163 @@
+package com.labsage.app.data.remote
+
+import com.google.gson.annotations.SerializedName
+
+// ============================================================
+// Request DTOs
+// ============================================================
+
+/**
+ * Non-streaming chat request — POST /api/chat
+ *
+ * Matches the Go struct in api/chat/v1/chat.go:
+ *   type ChatReq struct {
+ *       Id       string `json:"Id"`
+ *       Question string `json:"Question"`
+ *   }
+ */
+data class ChatRequest(
+    @SerializedName("Id")
+    val id: String,
+    @SerializedName("Question")
+    val question: String
+)
+
+/**
+ * SSE streaming chat request — POST /api/chat_stream
+ *
+ * Matches the Go struct in api/chat/v1/chat.go:
+ *   type ChatStreamReq struct {
+ *       Id            string `json:"Id"`
+ *       Question      string `json:"Question"`
+ *       Continue      bool   `json:"Continue"`
+ *       PartialAnswer string `json:"PartialAnswer"`
+ *   }
+ */
+data class ChatStreamRequest(
+    @SerializedName("Id")
+    val id: String,
+    @SerializedName("Question")
+    val question: String,
+    @SerializedName("Continue")
+    val continueFlag: Boolean = false,
+    @SerializedName("PartialAnswer")
+    val partialAnswer: String = ""
+)
+
+// ============================================================
+// Response envelope
+// ============================================================
+
+/**
+ * Unified API response envelope — all non-SSE responses are wrapped in:
+ *   { "message": "OK", "data": <actual payload> }
+ *
+ * Matches GoFrame's ResponseMiddleware pattern.
+ */
+data class ApiResponse<T>(
+    @SerializedName("message")
+    val message: String,
+    @SerializedName("data")
+    val data: T?
+)
+
+// ============================================================
+// Response data classes
+// ============================================================
+
+/**
+ * Non-streaming chat response data.
+ *   type ChatRes struct {
+ *       Answer    string         `json:"answer"`
+ *       Route     string         `json:"route"`
+ *       Trace     []string       `json:"trace"`
+ *       ToolStats map[string]int `json:"toolStats"`
+ *   }
+ */
+data class ChatData(
+    @SerializedName("answer")
+    val answer: String,
+    @SerializedName("route")
+    val route: String? = null,
+    @SerializedName("trace")
+    val trace: List<String>? = null,
+    @SerializedName("toolStats")
+    val toolStats: Map<String, Int>? = null
+)
+
+/**
+ * File upload response data.
+ *   type FileUploadRes struct {
+ *       FileName string `json:"fileName"`
+ *       FilePath string `json:"filePath"`
+ *       FileSize int64  `json:"fileSize"`
+ *   }
+ */
+data class UploadData(
+    @SerializedName("fileName")
+    val fileName: String,
+    @SerializedName("filePath")
+    val filePath: String,
+    @SerializedName("fileSize")
+    val fileSize: Long
+)
+
+// ============================================================
+// SSE event payloads (JSON data fields within SSE events)
+// ============================================================
+
+/** Payload of "event: connected" */
+data class ConnectedPayload(
+    @SerializedName("status")
+    val status: String,
+    @SerializedName("client_id")
+    val clientId: String
+)
+
+/** Payload of "event: trace_summary" */
+data class TraceSummaryPayload(
+    @SerializedName("tool_stats")
+    val toolStats: Map<String, Int> = emptyMap(),
+    @SerializedName("total_tool_calls")
+    val totalToolCalls: Int = 0,
+    @SerializedName("trace_count")
+    val traceCount: Int = 0
+)
+
+/** Payload of "event: error" */
+data class SseErrorPayload(
+    @SerializedName("message")
+    val message: String,
+    @SerializedName("partial")
+    val partial: Boolean = false,
+    @SerializedName("retryable")
+    val retryable: Boolean = true
+)
+
+// ============================================================
+// Session context (summary + facts) — GET/PUT /api/session/context
+// ============================================================
+
+/** GET /api/session/context?Id=... response data */
+data class SessionContextData(
+    @SerializedName("summary")
+    val summary: String,
+    @SerializedName("facts")
+    val facts: String
+)
+
+/** PUT /api/session/context request body */
+data class UpdateSessionContextRequest(
+    @SerializedName("Id")
+    val id: String,
+    @SerializedName("summary")
+    val summary: String? = null,
+    @SerializedName("facts")
+    val facts: String? = null
+)
+
+/** PUT /api/session/context response data */
+data class UpdateSessionContextResponse(
+    @SerializedName("ok")
+    val ok: Boolean
+)
