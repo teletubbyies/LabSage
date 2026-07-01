@@ -1,8 +1,0 @@
-com.labsage.app-pngs-0 /Users/zzy/Desktop/Android/LabSage/app/build/generated/res/pngs/debug
-com.labsage.app-updated_navigation_xml-1 /Users/zzy/Desktop/Android/LabSage/app/build/generated/updated_navigation_xml/debug
-com.labsage.app-packageDebugResources-2 /Users/zzy/Desktop/Android/LabSage/app/build/intermediates/incremental/debug/packageDebugResources/merged.dir
-com.labsage.app-packageDebugResources-3 /Users/zzy/Desktop/Android/LabSage/app/build/intermediates/incremental/debug/packageDebugResources/stripped.dir
-com.labsage.app-debug-4 /Users/zzy/Desktop/Android/LabSage/app/build/intermediates/merged_res/debug/mergeDebugResources
-com.labsage.app-debug-5 /Users/zzy/Desktop/Android/LabSage/app/src/debug/res
-com.labsage.app-main-6 /Users/zzy/Desktop/Android/LabSage/app/src/main/res
-gradleHome-0 /Users/zzy/.gradle
