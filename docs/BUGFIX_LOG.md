@@ -142,6 +142,7 @@
 | 9 | SSE 空消息不展示 | P1 | UI 缺失 | ✅ 已修复 |
 | 10 | 摘要对话框不关闭 | P2 | UI 逻辑 | ✅ 已修复 |
 | 11 | trySend 溢丢弃 message/done | P0 | 数据丢失 | ✅ 已修复 |
+| 12 | Markdown 库选型 | P1 | 依赖兼容 | ✅ jeziellago |
 
 ---
 
@@ -161,6 +162,25 @@
 | **影响文件** | `OkHttpSseDataSource.kt`，`ChatViewModel.kt`（更新 trace 处理） |
 
 | **面试考点**：`callbackFlow` vs `channelFlow` 的区别？`trySend` 的返回值含义？Channel 背压策略（SUSPEND/CONFLATED/BUFFERED/UNLIMITED）的选择？
+
+---
+
+### 12. Markdown 渲染库选型 — mikepenz 全系不兼容 Compose BOM 2025.06.01
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | 多次尝试 `mikepenz/multiplatform-markdown-renderer-m3` v0.35.0 / v0.40.2 / v0.41.0，编译通过但运行时均崩溃：`NoSuchMethodError: getCurrentCompositeKeyHashCode(Landroidx/compose/runtime/Composer;I)J` |
+| **根因** | mikepenz 库 v0.35+ 编译目标为 Compose Runtime 1.10+。项目 Compose BOM `2025.06.01` 提供的 Runtime 版本早于 1.10，不包含 `ComposablesKt.getCurrentCompositeKeyHashCode()` 方法 |
+| **选型** | |
+| 库 | 版本 | 结果 |
+| mikepenz M3 | 0.41.0 | ❌ NoSuchMethodError |
+| mikepenz M3 | 0.40.2 | ❌ NoSuchMethodError |
+| mikepenz M3 | 0.35.0 | ❌ NoSuchMethodError |
+| **jeziellago** | **0.5.7** | ✅ 兼容，MIT license，845 stars |
+| **决策** | 使用 `dev.jeziellago:compose-markdown:0.5.7`（JitPack），API：`MarkdownText(markdown = ...)`。纯 Compose（内嵌 TextView），支持 HTML/tables/task lists/linkify。内存开销低，无 WebView 依赖 |
+| **影响文件** | `gradle/libs.versions.toml`，`settings.gradle.kts`（JitPack repo），`MessageBubble.kt`，`ChatScreen.kt` |
+
+| **面试考点**：JitPack vs Maven Central 的区别？Compose Runtime 版本兼容性如何排查？WebView vs TextView-based Markdown 渲染的选型依据？
 
 ---
 
