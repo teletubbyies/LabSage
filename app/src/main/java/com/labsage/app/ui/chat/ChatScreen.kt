@@ -38,6 +38,7 @@ import com.labsage.app.domain.model.StreamState
 import com.labsage.app.ui.chat.components.*
 import com.labsage.app.ui.theme.*
 import com.labsage.app.ui.theme.Success
+import dev.jeziellago.compose.markdowntext.MarkdownText
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -191,15 +192,32 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
                     OutlinedTextField(
                         value = editText, onValueChange = { editText = it },
                         modifier = Modifier.fillMaxWidth().heightIn(min = 130.dp),
-                        label = { Text("Summary") },
+                        label = { Text("Summary (Markdown)") },
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary)
                     )
+                    Spacer(Modifier.height(8.dp))
+                    Text("Preview", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                    Spacer(Modifier.height(4.dp))
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = Background,
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp)
+                    ) {
+                        if (editText.isNotBlank()) {
+                            MarkdownText(
+                                markdown = editText,
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        } else {
+                            Text("Summary preview will appear here", Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall, color = TextTertiary)
+                        }
+                    }
                     if (ctx.facts.isNotBlank()) {
                         Spacer(Modifier.height(12.dp))
                         Text("Facts · auto-generated", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
                         Spacer(Modifier.height(4.dp))
                         Surface(shape = MaterialTheme.shapes.small, color = Background) {
-                            Text(ctx.facts.take(500), Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp), color = TextSecondary)
+                            MarkdownText(markdown = ctx.facts.take(500), modifier = Modifier.padding(8.dp))
                         }
                     }
                 }

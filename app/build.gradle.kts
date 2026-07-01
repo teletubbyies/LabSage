@@ -76,9 +76,8 @@ dependencies {
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 
-    // Markdown rendering
-    implementation(libs.markdown.renderer.m3)
-    implementation(libs.markdown.renderer.code)
+    // Markdown rendering — jeziellago/compose-markdown
+    implementation(libs.markdown.renderer)
 
     // Testing
     testImplementation(libs.junit)

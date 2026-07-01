@@ -21,8 +21,10 @@ gson = "2.11.0"
 # Coroutines
 coroutines = "1.10.1"
 
-# Markdown rendering
-markdownRenderer = "0.40.2"
+# Markdown rendering — jeziellago (simpler, broader Compose compat)
+markdownRendererVersion = "0.5.7"
+# mikepenz (latest) — requires Compose 1.10+, incompatible with BOM 2025.06.01
+# markdownRendererMikepenz = "0.41.0"
 
 # Testing
 junit = "4.13.2"
@@ -65,9 +67,8 @@ gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 # Coroutines
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
-# Markdown rendering
-markdown-renderer-m3 = { group = "com.mikepenz", name = "multiplatform-markdown-renderer-m3", version.ref = "markdownRenderer" }
-markdown-renderer-code = { group = "com.mikepenz", name = "multiplatform-markdown-renderer-code", version.ref = "markdownRenderer" }
+# Markdown rendering — jeziellago (JitPack), simpler API, broader compat
+markdown-renderer = { group = "com.github.jeziellago", name = "compose-markdown", version.ref = "markdownRendererVersion" }
 
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }

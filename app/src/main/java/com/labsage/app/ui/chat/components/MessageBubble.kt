@@ -19,6 +19,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.labsage.app.ui.theme.*
+import dev.jeziellago.compose.markdowntext.MarkdownText
 
 @Composable
 fun MessageBubble(
@@ -64,20 +65,27 @@ fun MessageBubble(
                 tonalElevation = 0.dp
             ) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    Text(
-                        text = content.ifEmpty {
-                            if (!isUser && isStreaming) "Thinking" else ""
-                        },
-                        color = if (isUser) UserBubbleText else AssistantBubbleText,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            lineHeight = 22.sp,
-                            letterSpacing = 0.2.sp
+                    if (!isUser && !isStreaming && content.isNotBlank()) {
+                        // Completed assistant message — render Markdown
+                        MarkdownText(markdown = content)
+                    } else if (!isUser && isStreaming && content.isEmpty()) {
+                        // Empty during streaming — "Thinking..."
+                        Text(
+                            "Thinking",
+                            color = AssistantBubbleText,
+                            style = MaterialTheme.typography.bodyMedium
                         )
-                    )
-                    // Thinking animation when empty content during streaming
-                    if (!isUser && isStreaming && content.isEmpty()) {
                         Spacer(Modifier.height(2.dp))
                         ThinkingDots()
+                    } else {
+                        // User message or streaming partial — plain text
+                        Text(
+                            text = content.ifEmpty { "Thinking" },
+                            color = if (isUser) UserBubbleText else AssistantBubbleText,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                lineHeight = 22.sp, letterSpacing = 0.2.sp
+                            )
+                        )
                     }
                 }
             }
