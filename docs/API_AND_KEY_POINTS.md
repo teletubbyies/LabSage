@@ -333,7 +333,27 @@ fun InlineTraceSummary(traceLines: List<String>) {
 
 ---
 
-## 十、callbackFlow 背压与 trySend 陷阱（实战 Bug）
+## 十、Compose 性能优化 — 流式聊天场景
+
+### 瓶颈分析
+
+流式 SSE 场景下，每个 message chunk（~50/s）触发 Room 写入 → Flow 发射 → StateFlow 更新 → 全量 Composable 重组。四层链路每层都可能成为瓶颈。
+
+### 优化策略
+
+| 层级 | 问题 | 优化 | 效果 |
+|------|------|------|------|
+| Room → Flow | 每 chunk 触发全表查询发射 | `.conflate()` 丢弃中间态 | 重组 ~50/s → ~10/s |
+| LazyColumn 滚动 | `animateScrollToItem` 每帧都执行 | 新消息 animate / 内容更新 snap | 消除动画抖动 |
+| StateFlow → Compose | 每次值变化触发所有读取该值的 composable 重组 | `@Immutable` 标注 data class + `derivedStateOf` | 跳过无关重组 |
+| ViewModel 协程 | SSE Flow 收集在主线程 | 保持 `flowOn(Dispatchers.IO)`，Room 写入在 IO | 主线程不阻塞 |
+
+### 面试考点
+- `conflate()` vs `debounce()` vs `sample()`：conflate 立即消费最新值但丢弃中间值，适合 UI 更新；debounce 等待静默期，适合搜索输入
+- `@Immutable` vs `@Stable`：Immutable 保证所有属性 final + 不可变；Stable 允许 mutable 但变化可被追踪
+- `derivedStateOf` vs `remember(key)`：derivedStateOf 在读取时才计算，适合从其他 State 派生；remember(key) 在 key 变化时重建
+
+## 十一、callbackFlow 背压与 trySend 陷阱（实战 Bug）
 
 ### 问题
 `callbackFlow` 默认 buffer = 64。SSE 工具查询产生 200+ 条 trace 事件，`trySend()` 在 buffer 满后静默丢弃，包括后续的 `message` 和 `done` 事件，导致流式输出中断。

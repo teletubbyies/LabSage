@@ -288,7 +288,18 @@ M3 变体的 `Markdown` composable 自带 Material 3 默认 colors 和 typograph
 
 ---
 
-## 十、关键设计决策汇总
+## 十、性能优化
+
+流式场景下 message chunk ~50/s，优化重点在四层链路：
+
+- **Room → Flow**：`.conflate()` 丢弃中间态，重组从 ~50/s 降到 ~10/s
+- **LazyColumn**：新消息 `animateScrollToItem`，内容更新 `scrollToItem`（snap 无动画）
+- **StateFlow → Compose**：`@Immutable` 标注 data class + `derivedStateOf` 减少重组范围
+- **SSE 消费**：`flowOn(Dispatchers.IO)` 保持主线程不阻塞
+
+---
+
+## 十一、关键设计决策汇总
 
 | 决策 | 选择 | 原因 |
 |------|------|------|
