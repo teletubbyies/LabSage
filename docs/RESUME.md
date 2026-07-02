@@ -70,27 +70,33 @@
 
 ### 版本 A：详细版（适用于项目经历 3-4 条时）
 
-> **LabSage — AI 聊天机器人 Android 客户端** | 独立开发
+> **LabSage 实验室 AI 助手 Android 客户端** | 独立开发 | 2026.06 – 2026.07
 >
-> - 后端 SSE 流式接口在高频工具调用场景下产生 **200+ trace 事件**，超出 Channel 默认容量导致**消息静默丢失**。自研 **`callbackFlow` + OkHttp SSE** 流式引擎，通过事件过滤 + 无限缓冲 + Room 批量写入三级优化根除背压丢消息，**消息送达率 100%**
-> - 用户反馈每次发送新消息后**历史记录全部消失**。深入 SQLite 源码定位根因：**`REPLACE` 策略 = DELETE + INSERT**，DELETE 触发外键 `ON DELETE CASCADE` 级联删除全部消息。重构为 INSERT/UPDATE 显式分离，**历史数据零丢失**
-> - 流式场景下每秒 ~50 次 Room 更新触发 **LazyColumn 全量重组**，列表滚动明显抖动。应用 **`.conflate()` 限流 + `@Immutable` 跳过无关重组 + 拆分滚动策略**（新消息动画、更新快照），重组频率**降低 80%**，滚动恢复流畅
-> - 为覆盖流式对话的 5 种状态（空闲/接收中/完成/可续传错误/不可恢复错误），用 **`sealed class` + `StateFlow`** 构建类型安全状态机，消除 null 分支和状态遗漏。杀进程重启后通过 `is_partial` 字段**自动恢复中断消息和续传按钮**
-> - 两周内独立完成**全部 27 个源文件、2200+ 行 Kotlin**，从架构选型、编码联调到 12 个 Bug 的技术文档全覆盖，APK 端到端跑通
+> 为实验室自研 AI 知识助手后端（Go + Milvus + ReAct Agent + SSE 流式）独立开发的 Android 原生客户端，完成从 API 对接到 UI 渲染的完整链路。
+>
+> - 基于 **OkHttp `okhttp-sse`** 实现 SSE 流式消息接收，处理事件边界解析、连接中断恢复和流式 chunk 的增量持久化；通过后端 `Continue + PartialAnswer` 机制支持流中断后的断线续传
+> - 使用 **Jetpack Compose** 构建对话界面，自定义 `LazyColumn` 滚动策略（新消息到达时动画滚底、流式更新时快照滚底）；流式期间通过 `callbackFlow` 将 SSE 回调桥接为 Kotlin `Flow`，配合 `.conflate()` 控制重组频率
+> - 基于 **Room** 实现对话历史本地存储，设计 `conversation` + `message` 双表，`ForeignKey(CASCADE)` 保证引用完整性；流式消息采用首 chunk INSERT + 后续 UPDATE 的写入策略，杀进程后通过 `is_partial` 字段恢复中断消息
+> - 采用 **MVVM + StateFlow** 架构，流式状态建模为 `sealed class`（`Idle → Streaming → Completed → Error`），View 层仅观察单一状态源，屏幕旋转等配置变更下状态不丢失
+> - 集成 **`ConnectivityManager.NetworkCallback`** 监听网络状态，断网时顶部横幅提示；基于 Material 3 `darkColorScheme` + `isSystemInDarkTheme()` 实现暗黑模式跟随系统自动切换
+> - 解析 SSE `trace` 事件提取 ReAct Agent 工具调用摘要，在助手气泡旁以内联 Chip 实时展示（"Calling xxx..." / "Tool completed"），正式输出后自动隐藏
+> - 实现长按消息复制/分享/重编辑、Markdown 渲染（`jeziellago/compose-markdown`）、文件上传至知识库（`ActivityResultContracts.GetContent`）、会话摘要查看与编辑
 
 ### 版本 B：紧凑版（适用于项目经历 5-6 条时）
 
-> **LabSage — AI 聊天机器人 Android 客户端** | 独立开发
+> **LabSage 实验室 AI 助手 Android 客户端** | 独立开发
 >
-> - 自研 **`callbackFlow` + OkHttp SSE** 流式引擎，通过事件过滤 + 无限缓冲 + 批量写入解决 trace 洪峰导致的背压丢消息，**消息送达率 100%**
-> - 定位并修复 SQLite **`REPLACE` 触发 FK CASCADE 级联删除**的严重 Bug（REPLACE = DELETE + INSERT），重构为显式 INSERT/UPDATE 分离，**历史数据不再丢失**
-> - 应用 **`.conflate()` + `@Immutable` + 拆分滚动**优化流式 UI 性能，重组频率**降低 80%**，LazyColumn 滚动无抖动
-> - 用 **`sealed class` + `StateFlow`** 建模流式状态机，配合 Room 的 INSERT → UPDATE 持久化策略，杀进程后可**完整恢复中断消息**
-> - 独立交付 2200+ 行 Kotlin、27 个源文件，含 Markdown 渲染、Agent 执行可视化、暗黑模式、断网提示等功能，记录 **12 个深度 Bug 案例**
+> 为实验室自研 AI 知识助手后端独立开发的 Android 原生客户端，基于 Jetpack Compose + OkHttp + Room。
+>
+> - 基于 **OkHttp `okhttp-sse`** 实现 SSE 流式消息接收与事件解析，通过 `callbackFlow` 桥接为 Kotlin `Flow`，支持流中断后的断线续传
+> - 使用 **Jetpack Compose** 构建对话界面，自定义 `LazyColumn` 滚动策略适配流式更新场景，配合 `.conflate()` 控制重组频率
+> - 基于 **Room** 实现对话历史存储，双表 FK CASCADE 设计，流式消息首 chunk INSERT + 后续 UPDATE 保证杀进程可恢复
+> - 采用 **MVVM + StateFlow + sealed class** 状态机，View 层单一状态源，配置变更安全
+> - 实现暗黑模式系统自动切换、断网横幅提示、Markdown 渲染、Agent 工具调用状态内联展示、消息复制/分享/重编辑
 
 ### 版本 C：一行版（适用于技能总结或个人简介）
 
-> 独立开发 AI 聊天机器人 Android App，自研 SSE 流式引擎解决背压丢消息（送达率 100%），深入 SQLite 源码修复 REPLACE 触发级联删除 Bug，优化 Compose 流式 UI 性能（重组降低 80%），2200+ 行 Kotlin 端到端跑通。
+> 独立开发 AI 聊天机器人 Android 客户端（Jetpack Compose + OkHttp SSE + Room + MVVM），完成从 SSE 流式接收到 Compose UI 渲染的完整链路，支持断线续传、多会话管理、暗黑模式、Markdown 渲染与 Agent 执行状态实时展示。
 
 ---
 
