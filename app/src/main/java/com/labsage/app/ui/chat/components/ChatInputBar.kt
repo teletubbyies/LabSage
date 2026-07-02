@@ -15,7 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import com.labsage.app.ui.theme.*
+import com.labsage.app.ui.theme.LocalExtendedColors
 
 @Composable
 fun ChatInputBar(
@@ -27,10 +27,13 @@ fun ChatInputBar(
     onGpuQuery: () -> Unit = {},
     onCondaQuery: () -> Unit = {}
 ) {
+    val ext = LocalExtendedColors.current
+    val scheme = MaterialTheme.colorScheme
+
     Surface(
         modifier = modifier.fillMaxWidth(),
         shadowElevation = 4.dp,
-        color = Surface,
+        color = scheme.surface,
         tonalElevation = 0.dp
     ) {
         Row(
@@ -50,15 +53,15 @@ fun ChatInputBar(
                     value = value,
                     onValueChange = onValueChange,
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Message LabSage...", color = TextTertiary) },
+                    placeholder = { Text("Message LabSage...", color = scheme.onSurfaceVariant) },
                     maxLines = 5,
                     minLines = 1,
                     shape = RoundedCornerShape(22.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Primary,
-                        unfocusedBorderColor = Divider,
-                        focusedContainerColor = Surface,
-                        unfocusedContainerColor = Color(0xFFF9FAFB)
+                        focusedBorderColor = scheme.primary,
+                        unfocusedBorderColor = scheme.outlineVariant,
+                        focusedContainerColor = scheme.surface,
+                        unfocusedContainerColor = scheme.surfaceVariant
                     ),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(
@@ -73,8 +76,8 @@ fun ChatInputBar(
                 modifier = Modifier.size(48.dp),
                 shape = RoundedCornerShape(16.dp),
                 colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = Primary,
-                    disabledContainerColor = Divider
+                    containerColor = scheme.primary,
+                    disabledContainerColor = scheme.outlineVariant
                 )
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = Color.White)
@@ -85,20 +88,22 @@ fun ChatInputBar(
 
 @Composable
 private fun QuickChip(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit, enabled: Boolean) {
+    val scheme = MaterialTheme.colorScheme
+
     Surface(
         onClick = onClick,
         enabled = enabled,
         shape = RoundedCornerShape(16.dp),
-        color = PrimaryContainer,
+        color = scheme.primaryContainer,
         tonalElevation = 0.dp
     ) {
         Row(
             Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(icon, null, Modifier.size(14.dp), tint = Primary)
+            Icon(icon, null, Modifier.size(14.dp), tint = scheme.primary)
             Spacer(Modifier.width(4.dp))
-            Text(label, style = MaterialTheme.typography.labelSmall, color = Primary)
+            Text(label, style = MaterialTheme.typography.labelSmall, color = scheme.primary)
         }
     }
 }

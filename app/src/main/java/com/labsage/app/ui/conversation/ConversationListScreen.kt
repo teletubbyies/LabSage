@@ -19,7 +19,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.labsage.app.LabSageApplication
-import com.labsage.app.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -33,36 +32,38 @@ fun ConversationListScreen(
     val viewModel: ConversationListViewModel = viewModel(factory = app.conversationListViewModelFactory)
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
 
+    val scheme = MaterialTheme.colorScheme
+
     Scaffold(
-        containerColor = Background,
+        containerColor = scheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("LabSage", fontWeight = FontWeight.Bold, color = TextPrimary) },
+                title = { Text("LabSage", fontWeight = FontWeight.Bold, color = scheme.onBackground) },
                 actions = {
                     IconButton(onClick = { onNewConversation(viewModel.createNewConversation()) }) {
-                        Icon(Icons.Default.Add, "New chat", tint = TextSecondary)
+                        Icon(Icons.Default.Add, "New chat", tint = scheme.onSurfaceVariant)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Surface)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = scheme.surface)
             )
         }
     ) { padding ->
         if (conversations.isEmpty()) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Surface(shape = RoundedCornerShape(20.dp), color = PrimaryContainer, modifier = Modifier.size(64.dp)) {
+                    Surface(shape = RoundedCornerShape(20.dp), color = scheme.primaryContainer, modifier = Modifier.size(64.dp)) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Icon(Icons.AutoMirrored.Filled.Chat, null, tint = Primary, modifier = Modifier.size(28.dp))
+                            Icon(Icons.AutoMirrored.Filled.Chat, null, tint = scheme.primary, modifier = Modifier.size(28.dp))
                         }
                     }
                     Spacer(Modifier.height(16.dp))
-                    Text("No conversations yet", style = MaterialTheme.typography.titleMedium, color = TextSecondary)
+                    Text("No conversations yet", style = MaterialTheme.typography.titleMedium, color = scheme.onSurfaceVariant)
                     Spacer(Modifier.height(4.dp))
-                    Text("Tap + to start a new chat", style = MaterialTheme.typography.bodySmall, color = TextTertiary)
+                    Text("Tap + to start a new chat", style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
                     Spacer(Modifier.height(20.dp))
                     Button(
                         onClick = { onNewConversation(viewModel.createNewConversation()) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Primary),
+                        colors = ButtonDefaults.buttonColors(containerColor = scheme.primary),
                         shape = RoundedCornerShape(12.dp)
                     ) { Text("Start Chat") }
                 }
@@ -74,9 +75,9 @@ fun ConversationListScreen(
                         onClick = { onNewConversation(viewModel.createNewConversation()) },
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
                     ) {
-                        Icon(Icons.Default.Add, null, Modifier.size(18.dp), tint = Primary)
+                        Icon(Icons.Default.Add, null, Modifier.size(18.dp), tint = scheme.primary)
                         Spacer(Modifier.width(8.dp))
-                        Text("New conversation", color = Primary, fontWeight = FontWeight.Medium)
+                        Text("New conversation", color = scheme.primary, fontWeight = FontWeight.Medium)
                     }
                 }
                 items(conversations, key = { it.id }) { conv ->
@@ -93,6 +94,7 @@ private fun ConversationItem(
     onClick: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val scheme = MaterialTheme.colorScheme
     val fmt = remember { SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()) }
     Surface(
         modifier = Modifier
@@ -100,26 +102,26 @@ private fun ConversationItem(
             .padding(horizontal = 12.dp, vertical = 3.dp)
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
-        color = Surface,
+        color = scheme.surface,
         shadowElevation = 0.5.dp
     ) {
         Row(
             Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Surface(shape = RoundedCornerShape(12.dp), color = PrimaryContainer, modifier = Modifier.size(44.dp)) {
+            Surface(shape = RoundedCornerShape(12.dp), color = scheme.primaryContainer, modifier = Modifier.size(44.dp)) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Icon(Icons.AutoMirrored.Filled.Chat, null, Modifier.size(20.dp), tint = Primary)
+                    Icon(Icons.AutoMirrored.Filled.Chat, null, Modifier.size(20.dp), tint = scheme.primary)
                 }
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(conv.title, style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium, fontSize = 15.sp), maxLines = 1, overflow = TextOverflow.Ellipsis, color = TextPrimary)
+                Text(conv.title, style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium, fontSize = 15.sp), maxLines = 1, overflow = TextOverflow.Ellipsis, color = scheme.onBackground)
                 Spacer(Modifier.height(2.dp))
-                Text(fmt.format(Date(conv.updatedAt)), style = MaterialTheme.typography.labelSmall, color = TextTertiary)
+                Text(fmt.format(Date(conv.updatedAt)), style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
             }
             IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Default.Delete, "Delete", Modifier.size(16.dp), tint = TextTertiary)
+                Icon(Icons.Default.Delete, "Delete", Modifier.size(16.dp), tint = scheme.onSurfaceVariant)
             }
         }
     }

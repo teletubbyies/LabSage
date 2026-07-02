@@ -30,14 +30,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.labsage.app.LabSageApplication
 import com.labsage.app.domain.model.StreamState
 import com.labsage.app.ui.chat.components.*
-import com.labsage.app.ui.theme.*
-import com.labsage.app.ui.theme.Success
+import com.labsage.app.ui.theme.LocalExtendedColors
 import dev.jeziellago.compose.markdowntext.MarkdownText
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -56,6 +54,9 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val isStreaming by remember { derivedStateOf { streamState is StreamState.Streaming } }
+
+    val ext = LocalExtendedColors.current
+    val scheme = MaterialTheme.colorScheme
 
     var isOnline by remember { mutableStateOf(true) }
     DisposableEffect(Unit) {
@@ -87,18 +88,18 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
     var showTools by remember { mutableStateOf(false) }
 
     Scaffold(
-        containerColor = Background,
+        containerColor = scheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("LabSage", fontWeight = FontWeight.SemiBold, color = TextPrimary) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = TextPrimary) } },
+                title = { Text("LabSage", fontWeight = FontWeight.SemiBold, color = scheme.onBackground) },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = scheme.onBackground) } },
                 actions = {
                     IconButton(onClick = { viewModel.loadSessionContext() }) {
-                        Icon(Icons.Default.Description, "Summary", tint = TextSecondary)
+                        Icon(Icons.Default.Description, "Summary", tint = scheme.onSurfaceVariant)
                     }
                     Box {
                         IconButton(onClick = { showTools = true }) {
-                            Icon(Icons.Default.Build, "Tools", tint = TextSecondary)
+                            Icon(Icons.Default.Build, "Tools", tint = scheme.onSurfaceVariant)
                         }
                         DropdownMenu(expanded = showTools, onDismissRequest = { showTools = false }, offset = DpOffset(0.dp, 0.dp)) {
                             DropdownMenuItem(text = { Text("Query GPU Status") }, leadingIcon = { Icon(Icons.Default.Memory, null) }, onClick = { showTools = false; viewModel.queryGpuStatus() })
@@ -106,10 +107,10 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
                         }
                     }
                     IconButton(onClick = { filePicker.launch("*/*") }) {
-                        Icon(Icons.Default.AttachFile, "Upload", tint = TextSecondary)
+                        Icon(Icons.Default.AttachFile, "Upload", tint = scheme.onSurfaceVariant)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Surface)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = scheme.surface)
             )
         },
         bottomBar = {
@@ -121,11 +122,11 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
         Column(Modifier.fillMaxSize().padding(padding)) {
             // Offline banner
             if (!isOnline) {
-                Surface(Modifier.fillMaxWidth(), color = ErrorContainer) {
+                Surface(Modifier.fillMaxWidth(), color = scheme.errorContainer) {
                     Row(Modifier.padding(horizontal = 14.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.CloudOff, null, Modifier.size(15.dp), tint = Error)
+                        Icon(Icons.Default.CloudOff, null, Modifier.size(15.dp), tint = scheme.error)
                         Spacer(Modifier.width(8.dp))
-                        Text("No network connection", style = MaterialTheme.typography.labelSmall, color = Error)
+                        Text("No network connection", style = MaterialTheme.typography.labelSmall, color = scheme.error)
                     }
                 }
             }
@@ -165,12 +166,12 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
                 ) {
                     Surface(
                         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                        shape = RoundedCornerShape(10.dp), color = Color(0xFFD1FAE5)
+                        shape = RoundedCornerShape(10.dp), color = ext.completionBg
                     ) {
                         Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("✓", color = Success, style = MaterialTheme.typography.labelMedium)
+                            Text("✓", color = Color(0xFF34D399), style = MaterialTheme.typography.labelMedium)
                             Spacer(Modifier.width(6.dp))
-                            Text("Response complete", style = MaterialTheme.typography.labelSmall, color = Success)
+                            Text("Response complete", style = MaterialTheme.typography.labelSmall, color = Color(0xFF34D399))
                         }
                     }
                 }
@@ -190,7 +191,7 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
         var editText by remember(ctx) { mutableStateOf(ctx.summary) }
         AlertDialog(
             onDismissRequest = { viewModel.dismissSessionContext() },
-            icon = { Icon(Icons.Default.Description, null, tint = Primary) },
+            icon = { Icon(Icons.Default.Description, null, tint = scheme.primary) },
             title = { Text("Session Summary", fontWeight = FontWeight.SemiBold) },
             text = {
                 Column {
@@ -198,14 +199,14 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
                         value = editText, onValueChange = { editText = it },
                         modifier = Modifier.fillMaxWidth().heightIn(min = 130.dp),
                         label = { Text("Summary (Markdown)") },
-                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary)
+                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = scheme.primary)
                     )
                     Spacer(Modifier.height(8.dp))
-                    Text("Preview", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                    Text("Preview", style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
                     Spacer(Modifier.height(4.dp))
                     Surface(
                         shape = MaterialTheme.shapes.small,
-                        color = Background,
+                        color = scheme.background,
                         modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp)
                     ) {
                         if (editText.isNotBlank()) {
@@ -214,20 +215,20 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
                                 modifier = Modifier.padding(8.dp)
                             )
                         } else {
-                            Text("Summary preview will appear here", Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall, color = TextTertiary)
+                            Text("Summary preview will appear here", Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
                         }
                     }
                     if (ctx.facts.isNotBlank()) {
                         Spacer(Modifier.height(12.dp))
-                        Text("Facts · auto-generated", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                        Text("Facts · auto-generated", style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
                         Spacer(Modifier.height(4.dp))
-                        Surface(shape = MaterialTheme.shapes.small, color = Background) {
+                        Surface(shape = MaterialTheme.shapes.small, color = scheme.background) {
                             MarkdownText(markdown = ctx.facts.take(500), modifier = Modifier.padding(8.dp))
                         }
                     }
                 }
             },
-            confirmButton = { Button(onClick = { viewModel.updateSessionSummary(editText) }, colors = ButtonDefaults.buttonColors(containerColor = Primary)) { Text("Save") } },
+            confirmButton = { Button(onClick = { viewModel.updateSessionSummary(editText) }, colors = ButtonDefaults.buttonColors(containerColor = scheme.primary)) { Text("Save") } },
             dismissButton = { TextButton(onClick = { viewModel.dismissSessionContext() }) { Text("Close") } }
         )
     }
