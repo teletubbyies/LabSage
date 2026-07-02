@@ -55,7 +55,7 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
 
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
-    val isStreaming = streamState is StreamState.Streaming
+    val isStreaming by remember { derivedStateOf { streamState is StreamState.Streaming } }
 
     var isOnline by remember { mutableStateOf(true) }
     DisposableEffect(Unit) {
@@ -75,8 +75,13 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
         uri?.let { viewModel.uploadFile(it, context) }
     }
 
-    LaunchedEffect(messages.size, messages.lastOrNull()?.content) {
+    // Auto-scroll: animate on new messages, snap on content updates (faster)
+    LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    }
+    // Snap scroll on streaming content updates — avoid per-chunk animation jank
+    LaunchedEffect(messages.lastOrNull()?.content) {
+        if (isStreaming && messages.isNotEmpty()) listState.scrollToItem(messages.size - 1)
     }
 
     var showTools by remember { mutableStateOf(false) }

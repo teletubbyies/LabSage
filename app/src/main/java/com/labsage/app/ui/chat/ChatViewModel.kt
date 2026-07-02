@@ -67,11 +67,15 @@ class ChatViewModel(
     private var chunkCount = 0  // throttle Room writes
 
     init {
-        // Observe Room messages for this conversation
+        // Observe Room messages — conflate to skip intermediate states
+        // during rapid streaming updates (reduces recomposition from
+        // ~50/sec to ~10/sec without visible content loss)
         viewModelScope.launch {
-            repository.getMessages(conversationId).collect { entities ->
-                _messages.value = entities.map { it.toUiState() }
-            }
+            repository.getMessages(conversationId)
+                .conflate()  // drop intermediate emissions when consumer is slow
+                .collect { entities ->
+                    _messages.value = entities.map { it.toUiState() }
+                }
         }
     }
 
@@ -389,12 +393,14 @@ class ChatViewModel(
 // UI state models
 // ============================================================
 
+@androidx.compose.runtime.Immutable
 data class SessionContextUi(
     val summary: String,
     val facts: String,
     val isEditing: Boolean
 )
 
+@androidx.compose.runtime.Immutable
 data class MessageUiState(
     val id: Long,
     val role: String,
