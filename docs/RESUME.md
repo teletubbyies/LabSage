@@ -72,25 +72,25 @@
 
 > **LabSage — AI 聊天机器人 Android 客户端** | 独立开发
 >
-> - 从零搭建项目，采用 **MVVM + Jetpack Compose + Room + OkHttp SSE** 技术栈，2 周交付 **2200+ 行 Kotlin** 代码
-> - 基于 **OkHttp `okhttp-sse` + `callbackFlow`** 自研 SSE 流式解析引擎，支持断线续传；通过事件过滤 + Channel 无限缓冲 + Room 批量写入三级优化解决 **trace 事件洪峰导致的背压丢消息** Bug
-> - 使用 **StateFlow + sealed class** 设计流式对话状态机，结合 **LazyColumn + `.conflate()` + `@Immutable`** 优化，重组频率从 ~50/s 降至 ~10/s，滚动流畅无抖动
-> - 发现并修复 **`OnConflictStrategy.REPLACE` 触发 SQLite FK CASCADE 级联删除** 等 3 个 P0 级 Bug，从 SQLite 源码层面分析根因，累计记录 12 个技术案例
-> - 实现 Markdown 渲染、ReAct Agent 执行过程实时展示、暗黑模式、网络状态监控、长按消息交互等功能
+> - 后端 SSE 流式接口在高频工具调用场景下产生 **200+ trace 事件**，超出 Channel 默认容量导致**消息静默丢失**。自研 **`callbackFlow` + OkHttp SSE** 流式引擎，通过事件过滤 + 无限缓冲 + Room 批量写入三级优化根除背压丢消息，**消息送达率 100%**
+> - 用户反馈每次发送新消息后**历史记录全部消失**。深入 SQLite 源码定位根因：**`REPLACE` 策略 = DELETE + INSERT**，DELETE 触发外键 `ON DELETE CASCADE` 级联删除全部消息。重构为 INSERT/UPDATE 显式分离，**历史数据零丢失**
+> - 流式场景下每秒 ~50 次 Room 更新触发 **LazyColumn 全量重组**，列表滚动明显抖动。应用 **`.conflate()` 限流 + `@Immutable` 跳过无关重组 + 拆分滚动策略**（新消息动画、更新快照），重组频率**降低 80%**，滚动恢复流畅
+> - 为覆盖流式对话的 5 种状态（空闲/接收中/完成/可续传错误/不可恢复错误），用 **`sealed class` + `StateFlow`** 构建类型安全状态机，消除 null 分支和状态遗漏。杀进程重启后通过 `is_partial` 字段**自动恢复中断消息和续传按钮**
+> - 两周内独立完成**全部 27 个源文件、2200+ 行 Kotlin**，从架构选型、编码联调到 12 个 Bug 的技术文档全覆盖，APK 端到端跑通
 
 ### 版本 B：紧凑版（适用于项目经历 5-6 条时）
 
 > **LabSage — AI 聊天机器人 Android 客户端** | 独立开发
 >
-> - 采用 **MVVM + Jetpack Compose + Room + OkHttp SSE**，从零交付 2200+ 行 Kotlin 代码的 AI 聊天 App
-> - 基于 **`callbackFlow`** 自研 SSE 流式引擎，通过**事件过滤 + 无限缓冲 + 批量写入**三级优化解决背压丢消息问题
-> - 使用 **StateFlow + sealed class** 状态机 + **`.conflate()` + `@Immutable`** 优化流式 UI 性能，重组频率降低 80%
-> - 发现并修复 SQLite **REPLACE 触发 FK CASCADE 级联删除**等 3 个 P0 Bug，撰写 12 个 Bug 技术案例
-> - 实现 Markdown 渲染、Agent 执行过程可视化、暗黑模式、断网提示、消息交互等完整功能
+> - 自研 **`callbackFlow` + OkHttp SSE** 流式引擎，通过事件过滤 + 无限缓冲 + 批量写入解决 trace 洪峰导致的背压丢消息，**消息送达率 100%**
+> - 定位并修复 SQLite **`REPLACE` 触发 FK CASCADE 级联删除**的严重 Bug（REPLACE = DELETE + INSERT），重构为显式 INSERT/UPDATE 分离，**历史数据不再丢失**
+> - 应用 **`.conflate()` + `@Immutable` + 拆分滚动**优化流式 UI 性能，重组频率**降低 80%**，LazyColumn 滚动无抖动
+> - 用 **`sealed class` + `StateFlow`** 建模流式状态机，配合 Room 的 INSERT → UPDATE 持久化策略，杀进程后可**完整恢复中断消息**
+> - 独立交付 2200+ 行 Kotlin、27 个源文件，含 Markdown 渲染、Agent 执行可视化、暗黑模式、断网提示等功能，记录 **12 个深度 Bug 案例**
 
 ### 版本 C：一行版（适用于技能总结或个人简介）
 
-> 独立开发 AI 聊天机器人 Android App（**Jetpack Compose + MVVM + OkHttp SSE + Room**），自研 SSE 流式引擎并修复背压丢消息 Bug，优化流式 UI 性能（重组频率降低 80%），记录 12 个深度 Bug 技术案例。
+> 独立开发 AI 聊天机器人 Android App，自研 SSE 流式引擎解决背压丢消息（送达率 100%），深入 SQLite 源码修复 REPLACE 触发级联删除 Bug，优化 Compose 流式 UI 性能（重组降低 80%），2200+ 行 Kotlin 端到端跑通。
 
 ---
 
