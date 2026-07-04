@@ -10,12 +10,21 @@ import com.labsage.app.data.remote.LabSageApi
 import com.labsage.app.data.remote.OkHttpSseDataSource
 import com.labsage.app.data.remote.SseDataSource
 import com.labsage.app.data.repository.ChatRepository
+import com.labsage.app.data.repository.SettingsRepository
+import com.labsage.app.domain.model.AppSettings
 import com.labsage.app.ui.chat.ChatViewModel
 import com.labsage.app.ui.conversation.ConversationListViewModel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /**
@@ -27,17 +36,35 @@ import java.util.concurrent.TimeUnit
  * Two OkHttpClient instances share the same connection pool via newBuilder():
  *   - apiClient: 30s timeouts, body-level logging (for non-streaming endpoints)
  *   - sseClient:  no read timeout, header-level logging only (BODY would buffer the SSE stream)
+ *
+ * The network layer (Retrofit + SSE) is cached per base URL so the user can change
+ * the backend address in Settings and new requests pick it up immediately, without
+ * an app restart.
  */
 class LabSageApplication : Application() {
 
+    companion object {
+        /** Default backend URL (Android emulator → host localhost). */
+        const val DEFAULT_BASE_URL = AppSettings.DEFAULT_BASE_URL
+    }
+
     // ============================================================
-    // Configuration — change these for different environments
+    // Settings (DataStore)
     // ============================================================
 
-    companion object {
-        /** Android emulator → host localhost. Change to LAN IP for physical device. */
-        const val BASE_URL = "http://10.0.2.2:6872/"
-    }
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    val settingsRepository: SettingsRepository by lazy { SettingsRepository(this) }
+
+    /**
+     * Hot [AppSettings] stream. Eagerly subscribed so [currentBaseUrl] always
+     * reflects the latest persisted value; starts from defaults until DataStore
+     * finishes its first read.
+     */
+    val appSettings: StateFlow<AppSettings> = settingsRepository.settings
+        .stateIn(appScope, SharingStarted.Eagerly, AppSettings())
+
+    private val currentBaseUrl: String get() = appSettings.value.baseUrl
 
     // ============================================================
     // JSON
@@ -77,26 +104,42 @@ class LabSageApplication : Application() {
     }
 
     // ============================================================
-    // Retrofit — for non-streaming endpoints only
+    // Network layer — cached per base URL (hot-swappable from Settings)
     // ============================================================
 
-    val retrofit: Retrofit by lazy {
-        Retrofit.Builder()
-            .baseUrl(BASE_URL)
-            .client(apiOkHttpClient)
-            .addConverterFactory(GsonConverterFactory.create(gson))
-            .build()
+    private data class NetworkLayer(val api: LabSageApi, val sse: SseDataSource)
+
+    private val networkCache = ConcurrentHashMap<String, NetworkLayer>()
+
+    /** Normalize a user-entered URL into a Retrofit-compatible base (trailing "/"). */
+    private fun normalizeBaseUrl(raw: String): String {
+        var u = raw.trim()
+        if (u.isEmpty()) u = DEFAULT_BASE_URL
+        if (!u.startsWith("http://") && !u.startsWith("https://")) u = "http://$u"
+        if (!u.endsWith("/")) u += "/"
+        return u
     }
 
-    // ============================================================
-    // API services
-    // ============================================================
-
-    val api: LabSageApi by lazy { retrofit.create(LabSageApi::class.java) }
-
-    val sseDataSource: SseDataSource by lazy {
-        OkHttpSseDataSource(sseOkHttpClient, BASE_URL.trimEnd('/'), gson)
+    private fun networkLayerFor(rawUrl: String): NetworkLayer {
+        val base = normalizeBaseUrl(rawUrl)
+        return networkCache.getOrPut(base) {
+            val retrofit = Retrofit.Builder()
+                .baseUrl(base)
+                .client(apiOkHttpClient)
+                .addConverterFactory(GsonConverterFactory.create(gson))
+                .build()
+            NetworkLayer(
+                api = retrofit.create(LabSageApi::class.java),
+                sse = OkHttpSseDataSource(sseOkHttpClient, base.trimEnd('/'), gson)
+            )
+        }
     }
+
+    /** Current [LabSageApi] for the active base URL. */
+    val api: LabSageApi get() = networkLayerFor(currentBaseUrl).api
+
+    /** Current [SseDataSource] for the active base URL. */
+    val sseDataSource: SseDataSource get() = networkLayerFor(currentBaseUrl).sse
 
     // ============================================================
     // Room database
@@ -114,8 +157,7 @@ class LabSageApplication : Application() {
 
     val repository: ChatRepository by lazy {
         ChatRepository(
-            api = api,
-            sseDataSource = sseDataSource,
+            app = this,
             conversationDao = database.conversationDao(),
             messageDao = database.messageDao()
         )
@@ -130,7 +172,7 @@ class LabSageApplication : Application() {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 if (modelClass.isAssignableFrom(ChatViewModel::class.java)) {
-                    return ChatViewModel(repository, conversationId) as T
+                    return ChatViewModel(repository, settingsRepository, conversationId) as T
                 }
                 throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
             }
@@ -143,6 +185,18 @@ class LabSageApplication : Application() {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 if (modelClass.isAssignableFrom(ConversationListViewModel::class.java)) {
                     return ConversationListViewModel(repository) as T
+                }
+                throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
+            }
+        }
+    }
+
+    val settingsViewModelFactory: ViewModelProvider.Factory by lazy {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                if (modelClass.isAssignableFrom(com.labsage.app.ui.settings.SettingsViewModel::class.java)) {
+                    return com.labsage.app.ui.settings.SettingsViewModel(settingsRepository) as T
                 }
                 throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
             }

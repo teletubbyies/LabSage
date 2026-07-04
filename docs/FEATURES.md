@@ -248,3 +248,105 @@ val conversations = searchQuery
 - `app/src/main/java/com/labsage/app/data/repository/ChatRepository.kt`（`searchConversations`、`setConversationPinned`、`renameConversation`）
 - `app/src/main/java/com/labsage/app/ui/conversation/ConversationListViewModel.kt`（搜索 Flow、pin/rename 操作）
 - `app/src/main/java/com/labsage/app/ui/conversation/ConversationListScreen.kt`（搜索栏、分组、溢出菜单、重命名对话框）
+
+---
+
+## 四、设置 / 偏好页面（Settings）
+
+### 功能概述
+
+把原先硬编码在 `Application` 中的后端地址提取为用户可配置项，并新增完整的设置页面。所有设置通过 **DataStore Preferences** 持久化，即时生效：
+
+| 配置项 | 说明 | 生效方式 |
+|--------|------|---------|
+| **后端地址** | 替换硬编码 `10.0.2.2:6872` | 改后新请求即时生效（无需重启） |
+| **主题** | 跟随系统 / 浅色 / 深色（系统跟随已具备，新增手动覆盖） | 整树重组 |
+| **模型** | 首选模型下拉（`deepseek-reasoner` / `deepseek-chat`） | 实验性，需后端读取生效 |
+| **工具审批模式** | 开关；开启后发送前确认（见功能二） | 立即 |
+| **默认快捷操作** | 勾选 GPU / Conda 快捷 chip | 输入栏即时更新 |
+| **连接测试** | 短超时 GET 探活，显示延迟或错误 | 手动触发 |
+
+| 属性 | 值 |
+|------|-----|
+| 持久化 | `androidx.datastore:datastore-preferences` |
+| 状态 | `LabSageApplication.appSettings: StateFlow<AppSettings>` |
+| ViewModel | `SettingsViewModel` + `ChatViewModel`（审批模式同步） |
+| UI | `SettingsScreen`（`ui/settings/`） |
+
+### 为什么用 DataStore 而非 Room / SharedPreferences
+
+- **vs Room**：设置是扁平键值，无关系/查询需求；Room 的 schema 迁移成本不划算。
+- **vs SharedPreferences**：DataStore 协程/Flow 原生、线程安全、无 ANR 风险（SP 的 `commit()`/`apply()` 在 IO 阻塞与一致性问题上有坑）。
+- Preferences 变体足够（结构化数据才用 Proto 变体）。
+
+### 后端地址热切换 —— 按 URL 缓存网络层
+
+旧实现 `retrofit`/`api`/`sseDataSource` 都是 `by lazy` 单例，URL 写死。改为**按 base URL 缓存**：
+
+```kotlin
+private val networkCache = ConcurrentHashMap<String, NetworkLayer>()
+private data class NetworkLayer(val api: LabSageApi, val sse: SseDataSource)
+
+val api: LabSageApi get() = networkLayerFor(appSettings.value.baseUrl).api
+val sseDataSource: SseDataSource get() = networkLayerFor(appSettings.value.baseUrl).sse
+```
+
+- `ChatRepository` 不再持有 `api`/`sseDataSource`，而是持有 `app`，每次调用走 `app.api` / `app.sseDataSource` → 读当前 `appSettings.value.baseUrl`。
+- URL 变更后，下次请求 `networkLayerFor(newUrl)` 命中新条目（新建 Retrofit + SSE），旧条目保留（连接池复用，无泄漏）。
+- 无需重启 App，新请求立即指向新后端。
+
+URL 归一化：补 `http://` 前缀、补结尾 `/`（Retrofit 要求），SSE 端去尾 `/`。
+
+### 主题：从设置驱动整树
+
+`MainActivity.LabSageRoot` 收集 `appSettings`，把 `themeMode` 映射为 `darkTheme: Boolean` 再交给 `LabSageTheme`：
+
+```kotlin
+val darkTheme = when (settings.themeMode) {
+    SYSTEM -> isSystemInDarkTheme()
+    LIGHT  -> false
+    DARK   -> true
+}
+LabSageTheme(darkTheme = darkTheme) { LabSageNavGraph() }
+```
+
+设置页改主题 → `appSettings` 发射 → `LabSageRoot` 重组 → 整棵树换色。无需 Activity 重建。
+
+### 审批模式：持久化的单一事实源
+
+`ChatViewModel` 在 `init` 中 collect `settingsRepository.settings`，把 `approvalMode` 同步到本地 `_approvalMode`；`setApprovalMode()` 写 DataStore（不再直接改本地 state）。设置页开关与聊天页审批行为共用同一持久化值。
+
+### 快捷操作：数据驱动的 chip
+
+`ChatInputBar` 不再写死 GPU/Conda，改收 `quickChips: List<QuickChip>`；`ChatScreen` 从 `settings.quickActions` 构建（GPU→`queryGpuStatus`、Conda→`queryCondaEnv`）。设置页勾选即时反映到输入栏。
+
+### 连接测试
+
+`SettingsViewModel.testConnection(url)` 用一个 5s 超时的独立 `OkHttpClient` GET 目标 URL。**任何 HTTP 响应**都算可达（即便 404，说明服务在线）；连接拒绝/超时 → 失败。显示延迟毫秒或错误信息。
+
+### 模型选择（实验性）
+
+UI 下拉存到 DataStore；后端当前按固定函数构造模型（`OpenAIForDeepSeekV31Think` / `OpenAIForDeepSeekV3Quick`），不读该字段。要让选择真正生效，需后端在 `chat_stream` 请求中接收并据此选模型（已在 UI 与文档标注"实验性 · 需后端配合"）。这是设置页"可能需改后端"的那一项，留作后端扩展点。
+
+### 面试考点
+
+- DataStore vs SharedPreferences vs Room（一致性、线程模型、适用场景）
+- `ConcurrentHashMap.getOrPut` 的原子性？这里为什么可接受（构建幂等，多建一次无副作用）
+- 主题热切换如何不重建 Activity 就换色？（StateFlow 驱动 CompositionLocal/MaterialTheme 重组）
+- 后端地址热切换为什么不直接 `by lazy` 重建？（lazy 单例不可重置；按 URL 缓存 + 每次读 `appSettings.value` 才能跟随设置变化）
+- 协程/Flow 在 ViewModel 中的生命周期（`viewModelScope` + `stateIn(WhileSubscribed)`）
+
+### 影响文件
+
+- `gradle/libs.versions.toml`、`app/build.gradle.kts`（新增 datastore-preferences 依赖）
+- `app/src/main/java/com/labsage/app/domain/model/AppSettings.kt`（新增：`AppSettings`/`ThemeMode`/`QuickAction`）
+- `app/src/main/java/com/labsage/app/data/repository/SettingsRepository.kt`（新增：DataStore 读写）
+- `app/src/main/java/com/labsage/app/LabSageApplication.kt`（`appSettings` StateFlow、按 URL 缓存网络层、`ChatRepository` 改注入 app、`settingsViewModelFactory`）
+- `app/src/main/java/com/labsage/app/data/repository/ChatRepository.kt`（构造改为 `app`，远程层经 `app.api`/`app.sseDataSource`）
+- `app/src/main/java/com/labsage/app/ui/chat/ChatViewModel.kt`（注入 `SettingsRepository`、审批模式持久化同步）
+- `app/src/main/java/com/labsage/app/ui/chat/components/ChatInputBar.kt`（`quickChips` 数据驱动）
+- `app/src/main/java/com/labsage/app/ui/chat/ChatScreen.kt`（从设置构建 quickChips）
+- `app/src/main/java/com/labsage/app/ui/settings/SettingsViewModel.kt`（新增）
+- `app/src/main/java/com/labsage/app/ui/settings/SettingsScreen.kt`（新增）
+- `app/src/main/java/com/labsage/app/MainActivity.kt`（主题驱动 + 设置路由）
+- `app/src/main/java/com/labsage/app/ui/conversation/ConversationListScreen.kt`（设置入口齿轮）

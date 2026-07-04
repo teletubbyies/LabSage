@@ -2,6 +2,7 @@ package com.labsage.app.data.repository
 
 import android.content.Context
 import android.net.Uri
+import com.labsage.app.LabSageApplication
 import com.labsage.app.data.local.dao.ConversationDao
 import com.labsage.app.data.local.dao.MessageDao
 import com.labsage.app.data.local.entity.ConversationEntity
@@ -21,10 +22,12 @@ import java.io.File
  *   - Local: ConversationDao + MessageDao (Room)
  *
  * The ViewModel talks only to the repository — never to API/DAO directly.
+ *
+ * The remote layer is accessed through [app] so that a base-URL change made in
+ * Settings takes effect for new requests without rebuilding the repository.
  */
 class ChatRepository(
-    private val api: LabSageApi,
-    private val sseDataSource: SseDataSource,
+    private val app: LabSageApplication,
     private val conversationDao: ConversationDao,
     private val messageDao: MessageDao
 ) {
@@ -49,7 +52,7 @@ class ChatRepository(
     /** Non-streaming (quick mode) chat */
     suspend fun sendQuickMessage(sessionId: String, question: String): Result<ChatData> {
         return try {
-            val response = api.chat(ChatRequest(sessionId, question))
+            val response = app.api.chat(ChatRequest(sessionId, question))
             if (response.data != null) {
                 Result.success(response.data)
             } else {
@@ -62,7 +65,7 @@ class ChatRepository(
 
     /** SSE streaming chat — returns a Flow of parsed events */
     fun sendStreamMessage(sessionId: String, question: String): Flow<SseEvent> {
-        return sseDataSource.streamChat(
+        return app.sseDataSource.streamChat(
             ChatStreamRequest(id = sessionId, question = question)
         )
     }
@@ -73,7 +76,7 @@ class ChatRepository(
         question: String,
         partialAnswer: String
     ): Flow<SseEvent> {
-        return sseDataSource.streamChat(
+        return app.sseDataSource.streamChat(
             ChatStreamRequest(
                 id = sessionId,
                 question = question,
@@ -114,7 +117,7 @@ class ChatRepository(
                 .toRequestBody("application/octet-stream".toMediaType())
             val part = MultipartBody.Part.createFormData("file", fileName, requestBody)
 
-            val response = api.uploadFile(part)
+            val response = app.api.uploadFile(part)
             // Cleanup temp file
             tempFile.delete()
 
@@ -219,7 +222,7 @@ class ChatRepository(
 
     suspend fun getSessionContext(sessionId: String): Result<SessionContextData> {
         return try {
-            val response = api.getSessionContext(sessionId)
+            val response = app.api.getSessionContext(sessionId)
             if (response.data != null) Result.success(response.data)
             else Result.failure(Exception("Empty response"))
         } catch (e: Exception) {
@@ -230,7 +233,7 @@ class ChatRepository(
     suspend fun updateSessionSummary(sessionId: String, summary: String): Result<Boolean> {
         return try {
             val request = UpdateSessionContextRequest(id = sessionId, summary = summary)
-            val response = api.updateSessionContext(request)
+            val response = app.api.updateSessionContext(request)
             Result.success(response.data?.ok == true)
         } catch (e: Exception) {
             Result.failure(e)

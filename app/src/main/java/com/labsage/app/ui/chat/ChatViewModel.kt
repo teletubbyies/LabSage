@@ -7,6 +7,7 @@ import com.labsage.app.data.local.entity.MessageEntity
 import com.labsage.app.data.remote.SseEvent
 import com.labsage.app.data.remote.UploadData
 import com.labsage.app.data.repository.ChatRepository
+import com.labsage.app.data.repository.SettingsRepository
 import com.labsage.app.domain.model.StreamState
 import com.labsage.app.domain.model.ToolCallStatus
 import com.labsage.app.domain.model.ToolCallUi
@@ -27,6 +28,7 @@ import kotlinx.coroutines.launch
  */
 class ChatViewModel(
     private val repository: ChatRepository,
+    private val settingsRepository: SettingsRepository,
     private val conversationId: String
 ) : ViewModel() {
 
@@ -82,7 +84,8 @@ class ChatViewModel(
     val approvalMode: StateFlow<Boolean> = _approvalMode.asStateFlow()
 
     fun setApprovalMode(enabled: Boolean) {
-        _approvalMode.value = enabled
+        // Persist via DataStore; the collector below keeps _approvalMode in sync.
+        viewModelScope.launch { settingsRepository.setApprovalMode(enabled) }
     }
 
     /** Question awaiting user approval (non-null → dialog visible). */
@@ -123,6 +126,12 @@ class ChatViewModel(
                 .collect { entities ->
                     _messages.value = entities.map { it.toUiState() }
                 }
+        }
+        // Sync approval mode from persisted settings (single source of truth).
+        viewModelScope.launch {
+            settingsRepository.settings.collect { s ->
+                _approvalMode.value = s.approvalMode
+            }
         }
     }
 

@@ -6,16 +6,20 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import com.labsage.app.ui.theme.LocalExtendedColors
+
+/**
+ * One quick-action chip rendered above the input field. Built by [ChatScreen]
+ * from the user's configured default quick actions (Settings).
+ */
+data class QuickChip(val label: String, val icon: ImageVector, val onClick: () -> Unit)
 
 @Composable
 fun ChatInputBar(
@@ -24,12 +28,10 @@ fun ChatInputBar(
     onSend: () -> Unit,
     enabled: Boolean,
     modifier: Modifier = Modifier,
-    onGpuQuery: () -> Unit = {},
-    onCondaQuery: () -> Unit = {},
+    quickChips: List<QuickChip> = emptyList(),
     /** Voice-input callback — recognized text is appended to the field. */
     onVoiceResult: (String) -> Unit = {}
 ) {
-    val ext = LocalExtendedColors.current
     val scheme = MaterialTheme.colorScheme
 
     Surface(
@@ -46,11 +48,12 @@ fun ChatInputBar(
         ) {
             // Main column: chips + text field (takes remaining space)
             Column(modifier = Modifier.weight(1f)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    QuickChip("GPU", Icons.Default.Memory, onGpuQuery, enabled)
-                    QuickChip("Conda", Icons.Default.Terminal, onCondaQuery, enabled)
+                if (quickChips.isNotEmpty()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        quickChips.forEach { QuickChip(it.label, it.icon, it.onClick, enabled) }
+                    }
+                    Spacer(Modifier.height(6.dp))
                 }
-                Spacer(Modifier.height(6.dp))
                 OutlinedTextField(
                     value = value,
                     onValueChange = onValueChange,

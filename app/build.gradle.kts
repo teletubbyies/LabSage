@@ -65,6 +65,9 @@ dependencies {
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
 
+    // DataStore (settings persistence)
+    implementation(libs.androidx.datastore.preferences)
+
     // Network
     implementation(libs.okhttp)
     implementation(libs.okhttp.sse)

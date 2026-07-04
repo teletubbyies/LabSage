@@ -27,7 +27,8 @@ import java.util.*
 @Composable
 fun ConversationListScreen(
     onConversationClick: (String) -> Unit,
-    onNewConversation: (String) -> Unit
+    onNewConversation: (String) -> Unit,
+    onOpenSettings: () -> Unit = {}
 ) {
     val app = androidx.compose.ui.platform.LocalContext.current.applicationContext as LabSageApplication
     val viewModel: ConversationListViewModel = viewModel(factory = app.conversationListViewModelFactory)
@@ -51,6 +52,9 @@ fun ConversationListScreen(
             TopAppBar(
                 title = { Text("LabSage", fontWeight = FontWeight.Bold, color = scheme.onBackground) },
                 actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Default.Settings, "设置", tint = scheme.onSurfaceVariant)
+                    }
                     IconButton(onClick = { onNewConversation(viewModel.createNewConversation()) }) {
                         Icon(Icons.Default.Add, "New chat", tint = scheme.onSurfaceVariant)
                     }

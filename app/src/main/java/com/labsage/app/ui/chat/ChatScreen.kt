@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.labsage.app.LabSageApplication
+import com.labsage.app.domain.model.QuickAction
 import com.labsage.app.domain.model.StreamState
 import com.labsage.app.ui.chat.components.*
 import com.labsage.app.ui.theme.LocalExtendedColors
@@ -53,6 +54,17 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
     val toolCalls by viewModel.toolCalls.collectAsStateWithLifecycle()
     val activeRoute by viewModel.activeRoute.collectAsStateWithLifecycle()
     val pendingSend by viewModel.pendingSend.collectAsStateWithLifecycle()
+    val settings by app.appSettings.collectAsStateWithLifecycle()
+
+    // Build the quick-action chips from the user's configured default actions.
+    val quickChips = remember(settings.quickActions) {
+        settings.quickActions.mapNotNull { action ->
+            when (action) {
+                QuickAction.GPU -> QuickChip("GPU", Icons.Default.Memory) { viewModel.queryGpuStatus() }
+                QuickAction.CONDA -> QuickChip("Conda", Icons.Default.Terminal) { viewModel.queryCondaEnv() }
+            }
+        }
+    }
 
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -119,7 +131,7 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
         bottomBar = {
             ChatInputBar(value = inputText, onValueChange = { inputText = it },
                 onSend = { if (inputText.isNotBlank()) { viewModel.sendMessage(inputText.trim()); inputText = "" } },
-                enabled = !isStreaming, onGpuQuery = { viewModel.queryGpuStatus() }, onCondaQuery = { viewModel.queryCondaEnv() },
+                enabled = !isStreaming, quickChips = quickChips,
                 onVoiceResult = { recognized ->
                     // Append recognized speech to whatever is already typed.
                     inputText = if (inputText.isBlank()) recognized else inputText + recognized
