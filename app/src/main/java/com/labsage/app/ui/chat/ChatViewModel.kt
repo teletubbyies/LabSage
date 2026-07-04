@@ -8,6 +8,8 @@ import com.labsage.app.data.remote.SseEvent
 import com.labsage.app.data.remote.UploadData
 import com.labsage.app.data.repository.ChatRepository
 import com.labsage.app.domain.model.StreamState
+import com.labsage.app.domain.model.ToolCallStatus
+import com.labsage.app.domain.model.ToolCallUi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -53,6 +55,49 @@ class ChatViewModel(
     private val _justCompleted = MutableStateFlow(false)
     val justCompleted: StateFlow<Boolean> = _justCompleted.asStateFlow()
 
+    /**
+     * Structured tool calls for the current/last stream — drives the expandable
+     * execution panel. Survives past Done (until the next send) so the user can
+     * inspect what ran after a response completes.
+     */
+    private val _toolCalls = MutableStateFlow<List<ToolCallUi>>(emptyList())
+    val toolCalls: StateFlow<List<ToolCallUi>> = _toolCalls.asStateFlow()
+
+    /** Route (direct/react) of the current/last stream. */
+    private val _activeRoute = MutableStateFlow<String?>(null)
+    val activeRoute: StateFlow<String?> = _activeRoute.asStateFlow()
+
+    // ============================================================
+    // Approval mode — client-side pre-send gate (human-in-the-loop)
+    // ============================================================
+
+    /**
+     * When true, [sendMessage] / quick actions do not execute immediately;
+     * instead the question is staged in [_pendingSend] and the UI shows a
+     * confirmation dialog. Genuine mid-stream interception would require the
+     * backend to pause on each tool call — this gate covers the common case of
+     * confirming a tool-bearing query before it leaves the device.
+     */
+    private val _approvalMode = MutableStateFlow(false)
+    val approvalMode: StateFlow<Boolean> = _approvalMode.asStateFlow()
+
+    fun setApprovalMode(enabled: Boolean) {
+        _approvalMode.value = enabled
+    }
+
+    /** Question awaiting user approval (non-null → dialog visible). */
+    private val _pendingSend = MutableStateFlow<String?>(null)
+    val pendingSend: StateFlow<String?> = _pendingSend.asStateFlow()
+
+    fun confirmPendingSend() {
+        _pendingSend.value?.let { doSend(it) }
+        _pendingSend.value = null
+    }
+
+    fun cancelPendingSend() {
+        _pendingSend.value = null
+    }
+
     // ============================================================
     // Streaming accumulators
     // ============================================================
@@ -65,6 +110,8 @@ class ChatViewModel(
     private var currentRoute: String? = null
     private var lastQuestion: String = ""
     private var chunkCount = 0  // throttle Room writes
+    /** Per-tool-call start time (key → nanoTime) for duration measurement. */
+    private val toolCallStartNanos = mutableMapOf<String, Long>()
 
     init {
         // Observe Room messages — conflate to skip intermediate states
@@ -85,6 +132,16 @@ class ChatViewModel(
 
     fun sendMessage(question: String) {
         if (_streamState.value is StreamState.Streaming) return
+        // Approval gate: stage the question for the UI to confirm.
+        if (_approvalMode.value) {
+            _pendingSend.value = question
+            return
+        }
+        doSend(question)
+    }
+
+    private fun doSend(question: String) {
+        if (_streamState.value is StreamState.Streaming) return
         lastQuestion = question
 
         viewModelScope.launch {
@@ -100,6 +157,9 @@ class ChatViewModel(
             currentToolStats = mutableMapOf<String, Int>()
             _traceLines.value = emptyList()
             _toolStats.value = emptyMap()
+            _toolCalls.value = emptyList()
+            _activeRoute.value = null
+            toolCallStartNanos.clear()
             currentRoute = null
             streamingMessageId = null
             chunkCount = 0
@@ -210,6 +270,8 @@ class ChatViewModel(
                 accumulatedTraces.add(event.line)
                 // Only keep last 5 traces for inline display (avoid flooding)
                 _traceLines.value = accumulatedTraces.takeLast(5)
+                // Build structured tool-call timeline for the execution panel.
+                applyToolTrace(event.line)
             }
 
             is SseEvent.TraceSummary -> {
@@ -227,6 +289,7 @@ class ChatViewModel(
                         else if (line.contains("react")) "react"
                         else null
                     }
+                if (currentRoute != null) _activeRoute.value = currentRoute
             }
 
             is SseEvent.Done -> {
@@ -241,6 +304,14 @@ class ChatViewModel(
                     route = currentRoute,
                     toolStats = currentToolStats
                 )
+                // Any tool still CALLING when the stream ends did not finish.
+                if (_toolCalls.value.any { it.status == ToolCallStatus.CALLING }) {
+                    _toolCalls.value = _toolCalls.value.map {
+                        if (it.status == ToolCallStatus.CALLING) it.copy(status = ToolCallStatus.ERROR)
+                        else it
+                    }
+                }
+                _activeRoute.value = currentRoute
                 _traceLines.value = emptyList()
                 // Show completion indicator briefly
                 _justCompleted.value = true
@@ -306,6 +377,74 @@ class ChatViewModel(
 
     fun clearError() {
         _streamState.value = StreamState.Idle
+    }
+
+    /**
+     * Parse one structured trace line into the [_toolCalls] timeline and update
+     * the live [_activeRoute]. Recognized shapes (from the Go backend):
+     *   `[tool] 开始调用 #N <name> args=<json>`
+     *   `[tool] 调用完成 <name> result=<json>`
+     *   `[route] route=<direct|react> intent=...`
+     */
+    private fun applyToolTrace(line: String) {
+        when {
+            line.startsWith("[tool]") && line.contains("开始调用") -> {
+                val callNo = Regex("""#(\d+)""").find(line)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: (_toolCalls.value.size + 1)
+                val afterStart = line.substringAfter("开始调用", "").trim()
+                val name = afterStart.substringBefore(" args=").substringBefore(" ").trim()
+                    .ifEmpty { "tool" }
+                val args = line.substringAfter("args=", "").trim()
+                // Unique key: index + name + current count avoids collisions when
+                // the same tool is called repeatedly in one stream.
+                val key = "tc_${callNo}_${name}_${_toolCalls.value.size}"
+                toolCallStartNanos[key] = System.nanoTime()
+                _toolCalls.value = _toolCalls.value + ToolCallUi(
+                    key = key,
+                    index = callNo,
+                    name = name,
+                    status = ToolCallStatus.CALLING,
+                    argsText = args,
+                    resultText = "",
+                    durationMs = 0
+                )
+            }
+
+            line.startsWith("[tool]") && line.contains("调用完成") -> {
+                val name = line.substringAfter("调用完成", "").trim()
+                    .substringBefore(" result=").trim()
+                if (name.isEmpty()) return
+                val result = line.substringAfter("result=", "").trim()
+                // FIFO match: complete the OLDEST still-calling entry with this name.
+                val list = _toolCalls.value.toMutableList()
+                for (i in list.indices) {
+                    val tc = list[i]
+                    if (tc.status == ToolCallStatus.CALLING && tc.name == name) {
+                        val dur = toolCallStartNanos.remove(tc.key)
+                            ?.let { (System.nanoTime() - it) / 1_000_000 } ?: 0
+                        list[i] = tc.copy(
+                            status = ToolCallStatus.COMPLETED,
+                            resultText = result,
+                            durationMs = dur
+                        )
+                        break
+                    }
+                }
+                _toolCalls.value = list
+            }
+
+            line.startsWith("[route]") -> {
+                val route = when {
+                    line.contains("route=react") -> "react"
+                    line.contains("route=direct") -> "direct"
+                    else -> null
+                }
+                if (route != null) {
+                    currentRoute = route
+                    _activeRoute.value = route
+                }
+            }
+        }
     }
 
     /** Send a pre-built GPU status query */

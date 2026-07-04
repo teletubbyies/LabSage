@@ -143,6 +143,7 @@
 | 10 | 摘要对话框不关闭 | P2 | UI 逻辑 | ✅ 已修复 |
 | 11 | trySend 溢丢弃 message/done | P0 | 数据丢失 | ✅ 已修复 |
 | 12 | Markdown 库选型 | P1 | 依赖兼容 | ✅ jeziellago |
+| 13 | trace 过滤丢弃工具入参 | P2 | 功能缺陷 | ✅ 已修复 |
 
 ---
 
@@ -208,3 +209,16 @@
 | **附加修复** | `SessionContextUi` data class 被误放在 ChatViewModel class 内部（导致语法错误），移至顶层声明 |
 
 | **影响文件** | `ChatViewModel.kt`，`ChatScreen.kt` |
+
+---
+
+### 13. SSE trace 过滤丢弃工具入参 —— 工具执行面板拿不到 args
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | 工具执行面板升级时，每个工具调用卡的"输入参数"始终为空，只能拿到"输出摘要" |
+| **根因** | `OkHttpSseDataSource.onEvent()` 的 trace 过滤条件是 `l.contains("调用工具") || l.contains("调用完成") || l.contains("route=")`。后端工具入参行格式为 `[tool] 开始调用 #N <name> args=<json>`，它只含"开始调用"而不含上述任一关键字，被静默过滤掉；而含结果的 `[tool] 调用完成 ...` 因含"调用完成"得以保留 |
+| **触发条件** | 任何触发 ReAct 工具调用的查询（GPU / Conda / 文件操作） |
+| **修复** | 改为按结构化前缀过滤：保留 `l.startsWith("[tool]") || l.startsWith("[react]") || l.startsWith("[route")`。这些都是后端 `log_call_back.go` 发出的有界生命周期行（每工具调用 2-3 条，args 截断 160 / result 截断 400 字符），不会引入 BUG #11 的 200+ 自由文本 trace 溢出 |
+| **教训** | trace 过滤应以"结构化前缀"而非"中文关键字子串"为准则——关键字匹配会漏掉格式相近但措辞不同的生命周期行；前缀匹配更精确且能随格式稳定 |
+| **影响文件** | `OkHttpSseDataSource.kt` |

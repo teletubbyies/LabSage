@@ -65,3 +65,102 @@
 - `app/src/main/java/com/labsage/app/ui/chat/components/ChatInputBar.kt`（加入按钮 + `onVoiceResult` 参数）
 - `app/src/main/java/com/labsage/app/ui/chat/ChatScreen.kt`（传入 `onVoiceResult`，追加识别文本）
 - `app/src/main/AndroidManifest.xml`（声明 `RECORD_AUDIO`）
+
+---
+
+## 二、工具执行面板升级（Tool Execution Panel）
+
+### 功能概述
+
+将原有的"最后 5 行 trace + 工具名"展示升级为**结构化的工具执行时间线**：
+
+- **展开/折叠卡片**：每个工具调用一张卡，含状态徽标、调用序号、工具名、耗时；点击展开查看输入参数与输出摘要
+- **时间线可视化**：纵向连线 + 状态节点（完成=✓绿、调用中=⏳脉冲、中断=✕红）
+- **路由徽标**：在面板头部展示本次请求的路由决策（direct / react）
+- **审批模式**：开启后，发送消息前弹窗确认（人机协同，防误触发工具）
+
+任务定位为"只增强 traceLines 与 UI 渲染，不改变 ViewModel 结构"——实现上引入了 `toolCalls` / `activeRoute` 两个 StateFlow（仍属同一 ChatViewModel，未拆分），其余是数据解析与 UI。
+
+| 属性 | 值 |
+|------|-----|
+| 数据模型 | `ToolCallUi`（`domain/model/ToolCall.kt`） |
+| 解析 | `ChatViewModel.applyToolTrace()` 把 trace 文本解析为结构化对象 |
+| UI | `ToolExecutionPanel`（`ui/chat/components/ToolExecutionPanel.kt`） |
+| SSE 过滤 | 放宽为保留 `[tool]` / `[react]` / `[route]` 前缀的生命周期行 |
+
+### 后端 trace 格式（数据来源）
+
+后端 `utility/log_call_back/log_call_back.go` 发出的结构化 trace：
+
+| trace 行 | 含义 |
+|---------|------|
+| `[react] 模型决定调用工具：name1 \| name2` | 路由到 ReAct，模型决定调用工具 |
+| `[tool] 开始调用 #N <name> args=<json, ≤160>` | 工具开始执行，含序号与参数 |
+| `[tool] 调用完成 <name> result=<json, ≤400>` | 工具完成，含结果摘要 |
+| `[route] route=<direct\|react> intent=... confidence=...` | 路由决策 |
+
+**关键修复**：原 `OkHttpSseDataSource` 的 trace 过滤只保留 `调用工具` / `调用完成` / `route=`，把带参数的 `开始调用` 行（不含这些关键字）过滤掉了，导致拿不到工具入参。现改为按前缀 `[tool]` / `[react]` / `[route` 过滤——这些都是有界的生命周期行（每个工具调用仅 2-3 条，参数/结果由后端截断到 160/400 字符），不会重蹈"200+ trace 撑爆 channel"的覆辙（见 BUGFIX_LOG #11），且 `.buffer(Channel.UNLIMITED)` 仍作兜底。
+
+### 解析与配对策略
+
+`调用完成` 行**不带调用序号**，只有工具名。同名工具可能被多次调用，因此按 **FIFO** 配对：完成事件匹配"最早的、仍在 CALLING 状态的同名条目"。
+
+```
+开始调用 #1 query_nvidia_gpu_usage args={...}   → 列表追加 CALLING#1
+开始调用 #2 query_conda_env_usage args={...}    → 列表追加 CALLING#2
+调用完成 query_conda_env_usage result={...}     → 命中 CALLING#2 → COMPLETED
+调用完成 query_nvidia_gpu_usage result={...}    → 命中 CALLING#1 → COMPLETED
+```
+
+耗时用 `System.nanoTime()` 记录每个调用的起始纳秒，完成时 `(now - start)/1e6` 得到毫秒。流结束（Done）时仍在 CALLING 的条目标记为 ERROR（中断）。
+
+### 审批模式（人机协同）
+
+真正的"流中拦截工具调用"需要后端在每个工具调用前暂停并等待客户端确认（协议级改动）。当前实现为**客户端发送前确认闸门**——覆盖最常见场景：用户在发送可能触发工具的查询前二次确认。
+
+- `ChatViewModel.approvalMode: StateFlow<Boolean>`：开关（Feature 4 接入持久化设置）
+- 开启时 `sendMessage()` 不直接发送，而是把问题暂存到 `pendingSend`，UI 弹 `AlertDialog`
+- "允许发送" → `confirmPendingSend()` → 实际发送；"取消" → 丢弃
+- 快捷操作（GPU/Conda）同样经过此闸门（它们内部调用 `sendMessage`）
+
+> 端到端流中工具拦截列为后续工作：需后端新增 `tool_call_pending` 事件 + 客户端响应通道。
+
+### 数据流
+
+```
+SSE [tool]/[react]/[route] trace
+  → OkHttpSseDataSource（按前缀过滤后转发）
+    → ChatViewModel.handleSseEvent(Trace)
+      → accumulatedTraces（保留，供路由兜底解析）
+      → _traceLines（末 5 条，驱动头像旁内联 chip，行为不变）
+      → applyToolTrace(line)
+          → _toolCalls（结构化时间线）
+          → _activeRoute（路由）
+            → ChatScreen LazyColumn item: ToolExecutionPanel
+```
+
+### 面板状态生命周期
+
+- 发送新消息 → `_toolCalls` / `_activeRoute` 重置
+- 流式期间 → 工具调用逐条进入（CALLING → COMPLETED）
+- Done → 剩余 CALLING 标记 ERROR；`_activeRoute` 定稿；面板保留（折叠态）供用户事后查看
+- 下次发送 → 重置清空
+
+面板默认折叠（`rememberSaveable`），避免抢夺对话流焦点；头部用 `✓N ⏳N ✕N` 紧凑徽标给出概览。
+
+### 面试考点
+
+- 为什么按"工具名 + FIFO"配对而非序号？（完成行不带序号）
+- 放宽 trace 过滤会不会重现 channel 溢出？（前缀过滤的是有界生命周期行，非自由文本；`UNLIMITED` buffer 兜底）
+- `rememberSaveable(call.key)` 控制每张卡的展开态：为什么 key 用调用标识而非固定值？（同名多次调用需独立展开）
+- 审批模式为什么做在客户端发送前而非流中？（后端流式驱动，客户端无法暂停；真拦截需协议级支持）
+- 时间线节点的脉冲动画如何实现不卡顿？（`rememberInfiniteTransition` + `animateFloat`，纯绘制，不触发重组扩散）
+
+### 影响文件
+
+- `app/src/main/java/com/labsage/app/domain/model/ToolCall.kt`（新增，`ToolCallUi` + `ToolCallStatus`）
+- `app/src/main/java/com/labsage/app/ui/chat/components/ToolExecutionPanel.kt`（新增，替换旧 `TracePanel`）
+- `app/src/main/java/com/labsage/app/ui/chat/components/TracePanel.kt`（删除，旧的无结构 trace 面板，从未被调用）
+- `app/src/main/java/com/labsage/app/data/remote/OkHttpSseDataSource.kt`（trace 过滤放宽为前缀匹配）
+- `app/src/main/java/com/labsage/app/ui/chat/ChatViewModel.kt`（`toolCalls`/`activeRoute` 状态、`applyToolTrace` 解析、审批模式 `approvalMode`/`pendingSend`、`sendMessage` 拆分为 `doSend`）
+- `app/src/main/java/com/labsage/app/ui/chat/ChatScreen.kt`（渲染 `ToolExecutionPanel`、审批 `AlertDialog`）

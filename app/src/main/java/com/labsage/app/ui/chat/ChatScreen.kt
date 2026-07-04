@@ -50,6 +50,9 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
     val traceLines by viewModel.traceLines.collectAsStateWithLifecycle()
     val justCompleted by viewModel.justCompleted.collectAsStateWithLifecycle()
     val sessionContext by viewModel.sessionContext.collectAsStateWithLifecycle()
+    val toolCalls by viewModel.toolCalls.collectAsStateWithLifecycle()
+    val activeRoute by viewModel.activeRoute.collectAsStateWithLifecycle()
+    val pendingSend by viewModel.pendingSend.collectAsStateWithLifecycle()
 
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -160,6 +163,11 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
                 if (isStreaming && messages.none { it.role == "assistant" && it.isPartial }) {
                     item { StreamingIndicator() }
                 }
+                if (toolCalls.isNotEmpty() || activeRoute != null) {
+                    item(key = "tool_panel") {
+                        ToolExecutionPanel(toolCalls = toolCalls, route = activeRoute)
+                    }
+                }
             }
 
             if (justCompleted) {
@@ -187,6 +195,31 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
                 else -> {}
             }
         }
+    }
+
+    // Approval gate — visible only when approval mode stages a pending send.
+    val pending = pendingSend
+    if (pending != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelPendingSend() },
+            icon = { Icon(Icons.Default.Verified, null, tint = scheme.primary) },
+            title = { Text("确认执行", fontWeight = FontWeight.SemiBold) },
+            text = {
+                Column {
+                    Text("审批模式已开启。发送此消息可能触发后端工具调用：", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    Surface(shape = MaterialTheme.shapes.small, color = scheme.background, modifier = Modifier.fillMaxWidth()) {
+                        Text(pending, Modifier.padding(8.dp), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { viewModel.confirmPendingSend() }, colors = ButtonDefaults.buttonColors(containerColor = scheme.primary)) {
+                    Text("允许发送")
+                }
+            },
+            dismissButton = { TextButton(onClick = { viewModel.cancelPendingSend() }) { Text("取消") } }
+        )
     }
 
     // Session context dialog

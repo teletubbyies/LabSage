@@ -57,14 +57,20 @@ class OkHttpSseDataSource(
                 data: String
             ) {
                 val event = buildEvent(type, data) ?: return
-                // Filter trace events: only forward tool lifecycle lines (calling/completed).
-                // Raw queries generate 200+ trace lines; keeping all overflows the channel.
-                // Tool lifecycle events are ~3-5 per call — safe to forward.
-                if (event is SseEvent.Trace && !event.line.let { l ->
-                    l.contains("调用工具") || l.contains("调用完成") || l.contains("route=")
-                }) return
-                // trySend is safe after trace filtering: ~5 tool events + message chunks
-                // no longer risk buffer overflow from 200+ raw trace lines
+                // Filter trace events: forward only structured lifecycle lines used to build
+                // the tool execution panel. Raw queries generate 200+ free-form trace lines;
+                // keeping all of them would overflow the channel (see BUGFIX_LOG #11).
+                //
+                // Forwarded prefixes (all bounded — a handful per tool call, args capped at
+                // 160 chars and result at 400 chars by the backend):
+                //   [tool]   开始调用 #N name args=...  /  调用完成 name result=...
+                //   [react]  模型决定调用工具：...
+                //   [route]  route=... intent=...        /  [route_policy] ...
+                if (event is SseEvent.Trace) {
+                    val l = event.line
+                    val keep = l.startsWith("[tool]") || l.startsWith("[react]") || l.startsWith("[route")
+                    if (!keep) return
+                }
                 trySend(event)
             }
 
