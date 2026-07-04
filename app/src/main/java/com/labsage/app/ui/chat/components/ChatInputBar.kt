@@ -25,7 +25,9 @@ fun ChatInputBar(
     enabled: Boolean,
     modifier: Modifier = Modifier,
     onGpuQuery: () -> Unit = {},
-    onCondaQuery: () -> Unit = {}
+    onCondaQuery: () -> Unit = {},
+    /** Voice-input callback — recognized text is appended to the field. */
+    onVoiceResult: (String) -> Unit = {}
 ) {
     val ext = LocalExtendedColors.current
     val scheme = MaterialTheme.colorScheme
@@ -69,6 +71,12 @@ fun ChatInputBar(
                     )
                 )
             }
+            Spacer(Modifier.width(8.dp))
+            VoiceInputButton(
+                onResult = onVoiceResult,
+                enabled = enabled,
+                modifier = Modifier
+            )
             Spacer(Modifier.width(8.dp))
             FilledIconButton(
                 onClick = onSend,

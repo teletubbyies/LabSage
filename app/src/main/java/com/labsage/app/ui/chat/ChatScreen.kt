@@ -116,7 +116,11 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
         bottomBar = {
             ChatInputBar(value = inputText, onValueChange = { inputText = it },
                 onSend = { if (inputText.isNotBlank()) { viewModel.sendMessage(inputText.trim()); inputText = "" } },
-                enabled = !isStreaming, onGpuQuery = { viewModel.queryGpuStatus() }, onCondaQuery = { viewModel.queryCondaEnv() })
+                enabled = !isStreaming, onGpuQuery = { viewModel.queryGpuStatus() }, onCondaQuery = { viewModel.queryCondaEnv() },
+                onVoiceResult = { recognized ->
+                    // Append recognized speech to whatever is already typed.
+                    inputText = if (inputText.isBlank()) recognized else inputText + recognized
+                })
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
