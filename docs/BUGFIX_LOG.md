@@ -144,6 +144,7 @@
 | 11 | trySend 溢丢弃 message/done | P0 | 数据丢失 | ✅ 已修复 |
 | 12 | Markdown 库选型 | P1 | 依赖兼容 | ✅ jeziellago |
 | 13 | trace 过滤丢弃工具入参 | P2 | 功能缺陷 | ✅ 已修复 |
+| 14 | DeepSeek 400 missing messages.content | P0 | 后端（SuperBizAgent） | ✅ 已修复 |
 
 ---
 
@@ -222,3 +223,19 @@
 | **修复** | 改为按结构化前缀过滤：保留 `l.startsWith("[tool]") || l.startsWith("[react]") || l.startsWith("[route")`。这些都是后端 `log_call_back.go` 发出的有界生命周期行（每工具调用 2-3 条，args 截断 160 / result 截断 400 字符），不会引入 BUG #11 的 200+ 自由文本 trace 溢出 |
 | **教训** | trace 过滤应以"结构化前缀"而非"中文关键字子串"为准则——关键字匹配会漏掉格式相近但措辞不同的生命周期行；前缀匹配更精确且能随格式稳定 |
 | **影响文件** | `OkHttpSseDataSource.kt` |
+
+---
+
+### 14. DeepSeek 400 —— `missing messages.content`（后端 SuperBizAgent）
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | 触发 ReAct 工具调用的对话中，Android 端收到后端 SSE `error` 事件，弹出"Generation interrupted"横幅，错误信息：`error, status code: 400 ... The request failed because it is missing messages.content parameter`（带 DeepSeek 的 Message id）。点击"继续"/"重新生成"仍复现 |
+| **根因** | 上游 `github.com/meguminnnnnnnnn/go-openai`（eino-ext openai 适配器底层客户端）的 `ChatCompletionMessage.Content` 字段 tag 为 `json:"content,omitempty"`。ReAct 循环里模型返回只含 `tool_calls` 的 assistant 消息（`Content == ""`），agent 把它连同工具结果一起回放给模型时，`omitempty` 把 `content` 字段从请求体里删掉。OpenAI 容忍缺失，**DeepSeek 不容忍**，返回 400 |
+| **触发条件** | 任何 ReAct 路径下，模型决定调用工具后进行第二轮及以后的模型请求（assistant tool_call 消息被回放）；也发生于"继续"续传重建历史时 |
+| **修复** | 在 `SuperBizAgent` 新增模型装饰器 `deepSeekContentFixModel`（`internal/ai/models/deepseek_content_fix.go`）：包装 `ToolCallingChatModel`，在 `Generate`/`Stream` 前对入参消息做防御性拷贝，凡是 `role=assistant && len(ToolCalls)>0 && Content 为空白` 的消息，把 `Content` 置为单个空格（非空 → `omitempty` 不再丢弃，对模型无害）。`WithTools` 返回的实例同样包一层。在 `chat_pipeline/model.go` 的 `newQuickChatModel` / `newReasoningChatModel` 构造处统一套用 |
+| **为何不直接改第三方库** | `go-openai` 在 module cache 中，`go mod` 会覆盖；且 `omitempty` 对 OpenAI 是合理默认。装饰器在应用层修正 DeepSeek 的特殊要求，零侵入、可回退 |
+| **为何用空格而非空串** | 空串仍会被 `omitempty` 丢弃；空格非空、对模型语义无害，是 DeepSeek 社区通用 workaround |
+| **教训** | 跨厂商 LLM 兼容性陷阱：同一套 OpenAI 兼容协议，各厂商对"assistant 工具调用消息必须带 content"的要求不同；接入新厂商时应在请求出口处（model 装饰器 / 拦截器）做消息规范化，而非依赖底层客户端的默认序列化 |
+| **影响文件** | 后端 `internal/ai/models/deepseek_content_fix.go`（新增）、`internal/ai/agent/chat_pipeline/model.go`（套用装饰器） |
+| **归属** | 后端（SuperBizAgent，Go），独立提交于后端仓库；Android 端仅展示错误，本条供联调追溯 |
