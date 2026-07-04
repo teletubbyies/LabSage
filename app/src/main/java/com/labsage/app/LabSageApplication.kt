@@ -104,6 +104,7 @@ class LabSageApplication : Application() {
 
     val database: AppDatabase by lazy {
         Room.databaseBuilder(this, AppDatabase::class.java, "labsage.db")
+            .addMigrations(AppDatabase.MIGRATION_1_2)
             .build()
     }
 

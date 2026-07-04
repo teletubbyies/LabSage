@@ -11,9 +11,13 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ConversationDao {
 
-    /** All conversations, newest first */
-    @Query("SELECT * FROM conversations ORDER BY updated_at DESC")
+    /** All conversations, pinned first then newest first. */
+    @Query("SELECT * FROM conversations ORDER BY is_pinned DESC, updated_at DESC")
     fun getAllConversations(): Flow<List<ConversationEntity>>
+
+    /** Title-substring search, preserving pinned-first ordering. */
+    @Query("SELECT * FROM conversations WHERE title LIKE '%' || :query || '%' ORDER BY is_pinned DESC, updated_at DESC")
+    fun searchConversations(query: String): Flow<List<ConversationEntity>>
 
     /**
      * Insert a NEW conversation. Uses IGNORE (not REPLACE) because REPLACE
@@ -38,4 +42,12 @@ interface ConversationDao {
     /** Update only title and timestamp without full entity replacement */
     @Query("UPDATE conversations SET title = :title, updated_at = :updatedAt WHERE id = :id")
     suspend fun updateMeta(id: String, title: String, updatedAt: Long)
+
+    /** Rename a conversation without bumping its updated_at (no reordering). */
+    @Query("UPDATE conversations SET title = :title WHERE id = :id")
+    suspend fun updateTitle(id: String, title: String)
+
+    /** Toggle the pinned flag (pinned conversations sort to the top). */
+    @Query("UPDATE conversations SET is_pinned = :pinned WHERE id = :id")
+    suspend fun setPinned(id: String, pinned: Boolean)
 }

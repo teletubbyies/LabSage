@@ -35,6 +35,10 @@ class ChatRepository(
     fun getAllConversations(): Flow<List<ConversationEntity>> =
         conversationDao.getAllConversations()
 
+    /** Title-substring search across conversations (pinned-first ordering). */
+    fun searchConversations(query: String): Flow<List<ConversationEntity>> =
+        conversationDao.searchConversations(query)
+
     fun getMessages(conversationId: String): Flow<List<MessageEntity>> =
         messageDao.getMessagesByConversation(conversationId)
 
@@ -193,6 +197,16 @@ class ChatRepository(
 
     suspend fun deleteConversation(conversationId: String) {
         conversationDao.deleteById(conversationId)
+    }
+
+    /** Pin or unpin a conversation (pinned ones sort to the top). */
+    suspend fun setConversationPinned(conversationId: String, pinned: Boolean) {
+        conversationDao.setPinned(conversationId, pinned)
+    }
+
+    /** Rename a conversation without changing its updated_at (no reordering). */
+    suspend fun renameConversation(conversationId: String, newTitle: String) {
+        conversationDao.updateTitle(conversationId, newTitle.trim())
     }
 
     suspend fun deleteMessage(messageId: Long) {

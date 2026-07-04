@@ -164,3 +164,87 @@ SSE [tool]/[react]/[route] trace
 - `app/src/main/java/com/labsage/app/data/remote/OkHttpSseDataSource.kt`（trace 过滤放宽为前缀匹配）
 - `app/src/main/java/com/labsage/app/ui/chat/ChatViewModel.kt`（`toolCalls`/`activeRoute` 状态、`applyToolTrace` 解析、审批模式 `approvalMode`/`pendingSend`、`sendMessage` 拆分为 `doSend`）
 - `app/src/main/java/com/labsage/app/ui/chat/ChatScreen.kt`（渲染 `ToolExecutionPanel`、审批 `AlertDialog`）
+
+---
+
+## 三、对话组织（Conversation Organization）
+
+### 功能概述
+
+将会话列表从"纯时间倒序平铺"升级为可组织、可检索的结构：
+
+- **搜索**：按标题模糊搜索（实时过滤）
+- **置顶**：重要会话置顶，单独成组且始终在最前
+- **重命名**：就地重命名会话标题
+- **日期分组**：未置顶会话按 今天 / 昨天 / 更早 分组
+
+| 属性 | 值 |
+|------|-----|
+| 新增列 | `conversations.is_pinned`（DB v1 → v2 迁移） |
+| 搜索 | DAO `LIKE '%query%'`，`flatMapLatest` 在"全量/搜索"间切换 |
+| 分组 | `groupConversations()` 在 UI 层按 pinned + 日期分桶 |
+| 持久化 | Room（置顶/重命名即时落库，列表 Flow 自动刷新） |
+
+### 数据库迁移（v1 → v2）
+
+新增 `is_pinned INTEGER NOT NULL DEFAULT 0` 列：
+
+```kotlin
+val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE conversations ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
+    }
+}
+```
+
+- `ALTER TABLE ADD COLUMN` 用 `DEFAULT 0` 回填现有行 → 老会话全部"未置顶"，数据无损
+- 在 `Room.databaseBuilder(...).addMigrations(MIGRATION_1_2)` 注册，避免 `fallbackToDestructiveMigration` 清空用户历史
+
+### 排序与分组
+
+排序在 SQL 完成（`ORDER BY is_pinned DESC, updated_at DESC`），UI 只做分组，避免在 Kotlin 里反复全排序：
+
+```
+置顶组（is_pinned=1，按 updated_at 倒序）
+今天组（updated_at >= 今日 0 点）
+昨天组（昨日 0 点 <= updated_at < 今日 0 点）
+更早组（其余）
+```
+
+日期边界用 `Calendar` 取本地时区今日 0 点，避免跨时区错位。
+
+### 搜索的数据流
+
+```kotlin
+val conversations = searchQuery
+    .flatMapLatest { q ->
+        if (q.isBlank()) repository.getAllConversations()
+        else repository.searchConversations(q.trim())
+    }
+    .stateIn(...)
+```
+
+- `flatMapLatest`：查询词变化时取消上一个 Flow、切到新 Flow（避免旧搜索结果错位到达）
+- 搜索态下不分日期组，返回单一平铺结果，减少视觉噪音
+
+### 重命名的细节
+
+重命名用独立的 `UPDATE conversations SET title=:title`（仅改 title），**不**走 `updateMeta`（它同时改 `updated_at`）。这样重命名不会把会话"顶到今天组"——只有真正有新消息时才应上浮。
+
+### 面试考点
+
+- Room 迁移为什么写 `Migration` 而非 `fallbackToDestructiveMigration`？（保留用户数据；destructive 会清库）
+- `flatMapLatest` vs `switchMap`/`map`？（查询切换时取消旧 Flow，防止竞态）
+- 为什么排序放 SQL 而非 UI？（索引 + 单次排序；UI 只分桶，列表大时更省）
+- `is_pinned` 为什么用 INTEGER DEFAULT 0 而非 nullable？（Boolean 语义明确，老数据 0 = 未置顶，无需处理 null）
+- 重命名为什么不更新 `updated_at`？（语义：重命名 ≠ 活跃；避免列表意外重排）
+
+### 影响文件
+
+- `app/src/main/java/com/labsage/app/data/local/entity/ConversationEntity.kt`（`isPinned` 字段）
+- `app/src/main/java/com/labsage/app/data/local/dao/ConversationDao.kt`（排序、搜索、`updateTitle`、`setPinned`）
+- `app/src/main/java/com/labsage/app/data/local/AppDatabase.kt`（v2 + `MIGRATION_1_2`）
+- `app/src/main/java/com/labsage/app/LabSageApplication.kt`（注册迁移）
+- `app/src/main/java/com/labsage/app/data/repository/ChatRepository.kt`（`searchConversations`、`setConversationPinned`、`renameConversation`）
+- `app/src/main/java/com/labsage/app/ui/conversation/ConversationListViewModel.kt`（搜索 Flow、pin/rename 操作）
+- `app/src/main/java/com/labsage/app/ui/conversation/ConversationListScreen.kt`（搜索栏、分组、溢出菜单、重命名对话框）

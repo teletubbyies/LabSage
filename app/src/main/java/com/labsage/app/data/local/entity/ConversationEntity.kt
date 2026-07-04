@@ -22,5 +22,9 @@ data class ConversationEntity(
     val createdAt: Long = System.currentTimeMillis(),
 
     @ColumnInfo(name = "updated_at")
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+
+    /** Pinned conversations sort to the top of the list. */
+    @ColumnInfo(name = "is_pinned")
+    val isPinned: Boolean = false
 )
