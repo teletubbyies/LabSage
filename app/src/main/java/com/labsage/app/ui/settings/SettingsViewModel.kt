@@ -79,14 +79,18 @@ class SettingsViewModel(
     }
 
     private fun ping(rawUrl: String): ConnectionState {
-        val base = normalizeUrl(rawUrl)
         val client = OkHttpClient.Builder()
             .connectTimeout(5, TimeUnit.SECONDS)
             .readTimeout(5, TimeUnit.SECONDS)
             .build()
-        val request = Request.Builder().url(base).get().build()
         val startedAt = System.nanoTime()
+        // The whole body is wrapped — Request.Builder().url() throws an
+        // unchecked IllegalArgumentException for malformed URLs (bad port,
+        // bad scheme, stray spaces) BEFORE execute(), and that must surface
+        // as a Failed state, not crash the coroutine/app.
         return try {
+            val base = normalizeUrl(rawUrl)
+            val request = Request.Builder().url(base).get().build()
             client.newCall(request).execute().use { response ->
                 val latencyMs = (System.nanoTime() - startedAt) / 1_000_000
                 // Any HTTP status means the server answered → reachable.

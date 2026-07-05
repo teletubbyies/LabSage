@@ -146,6 +146,7 @@
 | 13 | trace 过滤丢弃工具入参 | P2 | 功能缺陷 | ✅ 已修复 |
 | 14 | DeepSeek 400 missing messages.content | P0 | 后端（SuperBizAgent） | ✅ 已修复 |
 | 15 | 设置页导致启动崩溃（DataStore NPE） | P0 | 生命周期 | ✅ 已修复 |
+| 16 | 测试连接输入非法 URL 崩溃 | P1 | 异常未捕获 | ✅ 已修复 |
 
 ---
 
@@ -254,3 +255,16 @@
 | **教训** | 1) `Application` 子类的**急切属性初始化器**里不要做依赖 base context 的操作（DataStore、Resources、SharedPreferences 的某些路径）——`attachBaseContext` 还没跑。2) 依赖 Application Context 的单例/仓库一律用 `by lazy`，把首次解析推迟到真正的运行期访问。3) `preferencesDataStore` 委托设计上要求 Context 已 attach，它在 Application 字段初始化期使用是经典陷阱 |
 | **验证** | 修复后 `installDebug` + 启动，进程稳定存活（PID 持续），无 `FATAL EXCEPTION`，正常进入会话列表空状态页 |
 | **影响文件** | `LabSageApplication.kt`（`appSettings` 改 `by lazy`） |
+
+---
+
+### 16. 测试连接输入非法 URL 直接崩溃 —— `ping` 未兜住 URL 解析异常
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | 在设置页"后端地址"输入一个非法端口（如 `http://x:68712/`，端口超 0–65535 范围）点"测试连接"，不显示"连接失败"而是 App 直接崩溃。Logcat：`java.lang.IllegalArgumentException: Invalid URL port: "68712"` → `okhttp3.Request$Builder.url` → `SettingsViewModel.ping` → 协程未捕获 |
+| **根因** | `SettingsViewModel.ping()` 里只把 `client.newCall(request).execute()` 包在 try/catch 内，而 `Request.Builder().url(base).build()` 在 try **之外**。OkHttp 的 `HttpUrl` 解析对非法 URL（端口越界、非法 scheme、含空格等）抛**非受检** `IllegalArgumentException`，直接逃出 `withContext`/`viewModelScope.launch`，未触达 `catch(e: Exception)`，最终由协程的未捕获异常处理器把进程拉崩 |
+| **触发条件** | 任何让 `Request.Builder().url()` 抛异常的输入——端口越界最常见，也包括缺 scheme、含空格、host 非法 |
+| **修复** | 把整个 `ping` 函数体（含 `normalizeUrl` + `Request.Builder().url()`）都纳入 try/catch；URL 解析失败也走 `ConnectionState.Failed(e.message)`，UI 显示"连接失败 · Invalid URL port: 68712" |
+| **教训** | 1) try/catch 的边界要覆盖所有可能抛非受检异常的调用，不能只裹"看起来会失败"的那行——OkHttp 的 `url()` 解析失败先于网络请求。2) 协程里的非受检异常若不被 catch，会冒泡到 `CoroutineExceptionHandler` 并（Android 默认）崩溃进程；网络/用户输入相关的逻辑务必兜底。3) 用户可输入的 URL 字段，宁可落到 `Result/Failed` 状态提示，绝不能让解析异常外溢 |
+| **影响文件** | `SettingsViewModel.kt`（`ping` 整体 try/catch） |
