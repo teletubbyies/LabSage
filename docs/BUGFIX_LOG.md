@@ -147,6 +147,7 @@
 | 14 | DeepSeek 400 missing messages.content | P0 | 后端（SuperBizAgent） | ✅ 已修复 |
 | 15 | 设置页导致启动崩溃（DataStore NPE） | P0 | 生命周期 | ✅ 已修复 |
 | 16 | 测试连接输入非法 URL 崩溃 | P1 | 异常未捕获 | ✅ 已修复 |
+| 17 | 工具卡片成功也显示"中断" | P1 | 解析错误 | ✅ 已修复 |
 
 ---
 
@@ -268,3 +269,16 @@
 | **修复** | 把整个 `ping` 函数体（含 `normalizeUrl` + `Request.Builder().url()`）都纳入 try/catch；URL 解析失败也走 `ConnectionState.Failed(e.message)`，UI 显示"连接失败 · Invalid URL port: 68712" |
 | **教训** | 1) try/catch 的边界要覆盖所有可能抛非受检异常的调用，不能只裹"看起来会失败"的那行——OkHttp 的 `url()` 解析失败先于网络请求。2) 协程里的非受检异常若不被 catch，会冒泡到 `CoroutineExceptionHandler` 并（Android 默认）崩溃进程；网络/用户输入相关的逻辑务必兜底。3) 用户可输入的 URL 字段，宁可落到 `Result/Failed` 状态提示，绝不能让解析异常外溢 |
 | **影响文件** | `SettingsViewModel.kt`（`ping` 整体 try/catch） |
+
+---
+
+### 17. 工具执行卡片即使成功也显示"中断" —— start 行名解析把 `#N` 当成了工具名
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | 功能二的工具执行面板里，工具明明成功执行了，展开卡片后状态仍是"中断"（ERROR），而不是"完成"（COMPLETED） |
+| **根因** | 后端 start 行格式为 `[tool] 开始调用 #1 query_nvidia_gpu_usage args={...}`——`#1` 调用序号夹在 `开始调用` 与工具名**之间**。`ChatViewModel.applyToolTrace()` 里取 start 行"第一个 token"作为 name，于是存成了 `#1`，而非 `query_nvidia_gpu_usage`。complete 行格式为 `[tool] 调用完成 query_nvidia_gpu_usage result={...}`（名字直接跟在 `调用完成` 后，无 `#N`），解析出 `query_nvidia_gpu_usage`。两者 name 不匹配 → complete 找不到对应 CALLING 条目 → 该工具始终停在 CALLING → 流结束（Done）时被兜底逻辑翻成 ERROR（"中断"） |
+| **验证（wire 格式）** | 后端源码 `log_call_back.go:64` `"[tool] 开始调用 #%d %s args=%s"`、`:105` `"[tool] 调用完成 %s result=%s"`；实采 `data/execution_traces/chat_trace.log` 中 `开始调用 #1 query_conda_env_usage args` / `调用完成 query_conda_env_usage result`，确认 `#N` 仅出现在 start 行且位于 name 之前 |
+| **修复** | start 行解析时跳过前导 `#N ` token：若 `开始调用` 后的串以 `#` 开头，先 `substringAfter(" ")` 去掉 `#N`，再取 name。这样 start 存 `query_nvidia_gpu_usage`、complete 也存同名，FIFO 配对命中 → COMPLETED |
+| **教训** | 文本协议解析别凭"第一个 token 是 name"的假设，要对照真实 wire 格式（`#N` 这类前缀很常见）；start/complete 两行格式不对称（一个带序号一个不带）时，配对键的提取必须在两侧产出同一值。调试这类问题最快是直接 grep 后端落盘的 trace 日志核对，而不是反复跑 App |
+| **影响文件** | `ChatViewModel.kt`（`applyToolTrace` start 分支名解析） |

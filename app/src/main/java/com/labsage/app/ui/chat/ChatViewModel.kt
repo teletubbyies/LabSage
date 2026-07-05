@@ -400,8 +400,18 @@ class ChatViewModel(
             line.startsWith("[tool]") && line.contains("开始调用") -> {
                 val callNo = Regex("""#(\d+)""").find(line)?.groupValues?.get(1)?.toIntOrNull()
                     ?: (_toolCalls.value.size + 1)
+                // Format: "[tool] 开始调用 #N <name> args=<json>" — the "#N"
+                // call-number sits BETWEEN "开始调用" and the name, so we must
+                // skip it to reach the name. Otherwise the start entry is stored
+                // under "#N" and never matches the "调用完成 <name>" completion
+                // line → the card stays CALLING and gets flipped to ERROR at Done.
                 val afterStart = line.substringAfter("开始调用", "").trim()
-                val name = afterStart.substringBefore(" args=").substringBefore(" ").trim()
+                val nameAndArgs = if (afterStart.startsWith("#")) {
+                    afterStart.substringAfter(" ", "").trim()
+                } else {
+                    afterStart
+                }
+                val name = nameAndArgs.substringBefore(" args=").substringBefore(" ").trim()
                     .ifEmpty { "tool" }
                 val args = line.substringAfter("args=", "").trim()
                 // Unique key: index + name + current count avoids collisions when
