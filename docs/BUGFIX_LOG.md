@@ -145,6 +145,7 @@
 | 12 | Markdown 库选型 | P1 | 依赖兼容 | ✅ jeziellago |
 | 13 | trace 过滤丢弃工具入参 | P2 | 功能缺陷 | ✅ 已修复 |
 | 14 | DeepSeek 400 missing messages.content | P0 | 后端（SuperBizAgent） | ✅ 已修复 |
+| 15 | 设置页导致启动崩溃（DataStore NPE） | P0 | 生命周期 | ✅ 已修复 |
 
 ---
 
@@ -239,3 +240,17 @@
 | **教训** | 跨厂商 LLM 兼容性陷阱：同一套 OpenAI 兼容协议，各厂商对"assistant 工具调用消息必须带 content"的要求不同；接入新厂商时应在请求出口处（model 装饰器 / 拦截器）做消息规范化，而非依赖底层客户端的默认序列化 |
 | **影响文件** | 后端 `internal/ai/models/deepseek_content_fix.go`（新增）、`internal/ai/agent/chat_pipeline/model.go`（套用装饰器） |
 | **归属** | 后端（SuperBizAgent，Go），独立提交于后端仓库；Android 端仅展示错误，本条供联调追溯 |
+
+---
+
+### 15. 设置页引入后启动崩溃 —— DataStore 在 Application 初始化期 NPE
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | 集成设置页（功能四）后，App 安装即崩溃，`崩溃了，打不开`。Logcat：`java.lang.RuntimeException: Unable to instantiate application com.labsage.app.LabSageApplication`，`Caused by: NullPointerException ... getApplicationContext()' on a null object reference`，栈顶 `PreferenceDataStoreSingletonDelegate.getValue` → `SettingsRepository.<init>` → `LabSageApplication.<init>` |
+| **根因** | `LabSageApplication` 中 `appSettings` 是**急切属性**（`val appSettings = settingsRepository.settings.stateIn(...)`，非 lazy）。Application 实例化时，属性初始化器在 `<init>` 阶段就触发 `settingsRepository`（lazy）解析 → 构造 `SettingsRepository(this)` → 访问 `context.settingsDataStore`（`preferencesDataStore` 委托）。该委托内部调用 `this.getApplicationContext()`。但 Application 的 base context（`mBase`）此刻**尚未 attach**——`Application.attachBaseContext()` 在构造函数之后才被系统调用。于是 `getApplicationContext()` 返回 null → NPE |
+| **触发条件** | 任何带 DataStore（`preferencesDataStore` 委托）且在 Application 急切初始化期访问的场景。本项目在功能四首次引入 DataStore |
+| **修复** | 把 `appSettings` 改为 `by lazy { ... }`。延迟到首次读取（发生在 Composable 或网络请求中，远晚于 `attachBaseContext`）才解析 `settingsRepository`，此时 base context 已 attach，`getApplicationContext()` 正常 |
+| **教训** | 1) `Application` 子类的**急切属性初始化器**里不要做依赖 base context 的操作（DataStore、Resources、SharedPreferences 的某些路径）——`attachBaseContext` 还没跑。2) 依赖 Application Context 的单例/仓库一律用 `by lazy`，把首次解析推迟到真正的运行期访问。3) `preferencesDataStore` 委托设计上要求 Context 已 attach，它在 Application 字段初始化期使用是经典陷阱 |
+| **验证** | 修复后 `installDebug` + 启动，进程稳定存活（PID 持续），无 `FATAL EXCEPTION`，正常进入会话列表空状态页 |
+| **影响文件** | `LabSageApplication.kt`（`appSettings` 改 `by lazy`） |

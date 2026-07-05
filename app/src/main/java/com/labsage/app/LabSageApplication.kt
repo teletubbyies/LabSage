@@ -60,9 +60,17 @@ class LabSageApplication : Application() {
      * Hot [AppSettings] stream. Eagerly subscribed so [currentBaseUrl] always
      * reflects the latest persisted value; starts from defaults until DataStore
      * finishes its first read.
+     *
+     * MUST be lazy: resolving it touches [settingsRepository], which touches the
+     * DataStore `preferencesDataStore` delegate, which calls getApplicationContext()
+     * on `this`. During Application <init> the base context is not yet attached
+     * (attachBaseContext runs later), so an eager initializer would NPE. Lazy defers
+     * the first access to a composable / network call, well after attach.
      */
-    val appSettings: StateFlow<AppSettings> = settingsRepository.settings
-        .stateIn(appScope, SharingStarted.Eagerly, AppSettings())
+    val appSettings: StateFlow<AppSettings> by lazy {
+        settingsRepository.settings
+            .stateIn(appScope, SharingStarted.Eagerly, AppSettings())
+    }
 
     private val currentBaseUrl: String get() = appSettings.value.baseUrl
 
