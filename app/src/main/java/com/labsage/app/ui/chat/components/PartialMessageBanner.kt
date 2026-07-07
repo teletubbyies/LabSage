@@ -2,12 +2,14 @@ package com.labsage.app.ui.chat.components
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 
 @Composable
 fun PartialMessageBanner(
@@ -20,24 +22,45 @@ fun PartialMessageBanner(
 
     Surface(
         modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = scheme.errorContainer
+        shape = RoundedCornerShape(14.dp),
+        color = scheme.errorContainer,
+        border = androidx.compose.foundation.BorderStroke(1.dp, scheme.error.copy(alpha = 0.25f))
     ) {
-        Row(
-            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                Text("Generation interrupted", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, color = scheme.error))
-                if (errorMessage.isNotBlank()) Text(errorMessage, style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp), color = scheme.onSurfaceVariant)
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.ErrorOutline, null, Modifier.size(18.dp), tint = scheme.error)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Generation interrupted",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                    color = scheme.onErrorContainer
+                )
             }
-            Row {
-                OutlinedButton(onClick = onRegenerate, shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
-                    Text("Regenerate", style = MaterialTheme.typography.labelSmall)
+            if (errorMessage.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    errorMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onErrorContainer.copy(alpha = 0.85f)
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = onRegenerate,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                ) {
+                    Text("Regenerate", style = MaterialTheme.typography.labelLarge)
                 }
                 Spacer(Modifier.width(8.dp))
-                Button(onClick = onContinue, shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = scheme.primary), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
-                    Text("Continue", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium))
+                Button(
+                    onClick = onContinue,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = scheme.error),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                ) {
+                    Text("Continue", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
                 }
             }
         }

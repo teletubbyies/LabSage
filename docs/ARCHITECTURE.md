@@ -40,7 +40,7 @@
 
 ### 为何不用 Hilt/Dagger
 
-聊天 App 的依赖图简单（单 Repository + 单 API 接口 + 单数据库），手动 DI（`LabSageApplication` 懒加载属性 + ViewModelFactory）约 150 行代码，比 Hilt 的注解处理器 + Dagger 组件生成的代码量更少，且完全透明可调试。
+聊天 App 的依赖图简单（单 Repository + 单 API 接口 + 单数据库），手动 DI（`LabSageApplication` 中约 10 个 `by lazy` 懒加载属性 + ViewModelFactory，约 210 行）比 Hilt 的注解处理器 + Dagger 组件生成的代码量更少，且完全透明可调试。
 
 ### 包结构
 
@@ -95,7 +95,8 @@ OkHttpSseDataSource (implements SseDataSource)
 
 ### 关键实现细节
 
-**SseParser** — 纯函数行解析器，零依赖可单元测试：
+**SseParser** — 手写的纯函数行解析器（零依赖、便于补单测）。
+> ⚠️ 学习/备选产物，**未接入运行链路**：生产用的是 OkHttp `okhttp-sse` 的 `EventSources` 内置协议解析（它已处理好 event/data 字段分离与空白行事件边界，直接把解析好的 `onEvent(type, data)` 喂给回调）。`SseParser` 是为理解 SSE 协议而写的备选实现，保留在仓库中作为面试展开素材。
 ```kotlin
 class SseParser {
     fun feed(line: String): RawSseFrame?  // 逐行喂入，空白行触发事件派发
@@ -204,24 +205,24 @@ ViewModel 通过 `viewModelScope.launch` 收集 Flow。配置变更时 ViewModel
 
 | 方案 | 问题 |
 |------|------|
-| jeziellago/compose-markdown | 非纯 Compose（内嵌 TextView），不支持流式增量，JitPack 分发 |
+| mikepenz/multiplatform-markdown-renderer-m3 | ❌ v0.35 / 0.40 / 0.41 运行时 `NoSuchMethodError: getCurrentCompositeKeyHashCode`——库编译目标依赖 Compose Runtime 1.10+，项目 BOM 2025.06.01 提供的 Runtime 更早、缺该方法 |
 | WebView + marked.js | 每条消息一个 WebView，+112MB 内存/实例，LazyColumn 不可行 |
 | 自定义 AnnotatedString | 4-8 周工程工作量 |
-| **mikepenz/multiplatform-markdown-renderer-m3** | ✅ 纯 Compose，976 stars，支持代码高亮 |
+| **jeziellago/compose-markdown 0.5.7** | ✅ 纯 Compose（内嵌 TextView），兼容当前 BOM，JitPack 分发 |
 
 ### 使用方式
 
 ```kotlin
-import com.mikepenz.markdown.m3.Markdown
+import dev.jeziellago.compose.markdowntext.MarkdownText
 
 // 流式进行中：纯文本（Markdown 不完整，直接 render 会断裂）
 Text(text = content, style = MaterialTheme.typography.bodyMedium)
 
 // 流式完成后：Markdown 渲染
-Markdown(content = content)
+MarkdownText(markdown = content)
 ```
 
-M3 变体的 `Markdown` composable 自带 Material 3 默认 colors 和 typography，无需额外配置。
+`MarkdownText` 默认跟随 Material 3 主题，无需额外 colors / typography 配置。
 
 ---
 
@@ -305,8 +306,49 @@ M3 变体的 `Markdown` composable 自带 Material 3 默认 colors 和 typograph
 |------|------|------|
 | DI 框架 | 手动 DI | 依赖图简单，Hilt 增加编译时开销但无实际收益 |
 | SSE 实现 | OkHttp `okhttp-sse` + `callbackFlow` | 绕过 Retrofit，OkHttp 原生 SSE 支持更可靠 |
-| Markdown 库 | mikepenz M3 | 纯 Compose，活跃维护，M3 主题兼容 |
+| Markdown 库 | jeziellago/compose-markdown 0.5.7 | 兼容当前 Compose BOM（mikepenz 系因 `getCurrentCompositeKeyHashCode` 缺失而不兼容） |
 | 流式持久化 | INSERT + UPDATE 模式 | 进程 kill 后可恢复 |
 | Base URL | `10.0.2.2:6872` | 模拟器映射宿主机 localhost |
 | 状态管理 | StateFlow + sealed class | 比 LiveData 更适合 Compose，sealed class 确保状态穷举 |
 | 超时策略 | SSE 0 超时 / API 30s | SSE 长连接不能被超时打断；短请求需快速失败 |
+| UI 视觉层 | "Sage" 设计系统 | 统一品牌色 / 字体 / 形状 / 组件语言；纯视觉重构，零契约改动 |
+
+---
+
+## 十二、UI 视觉设计系统（Sage 设计语言）
+
+将原本「标准 Material 3 模板」的视觉层整体重构为统一、有品牌识别度的 **Sage 设计语言**（emerald/teal 翡翠青绿色系）。**纯视觉重构**：所有 ViewModel、数据层、Repository 契约与回调零改动，仅替换 `ui/theme` 与各 Screen / Component 的表现层。
+
+### 设计令牌（ui/theme/）
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| 色板 | `Color.kt` | 9 级 Brand 翡翠色阶（Brand50–900）+ 完整 light/dark 双色方案（primary / secondary / tertiary / error 全槽位）；暗色为带绿色调的深石墨，对比度与层次更佳 |
+| 字体 | `Type.kt` | display / headline / title / body / label 完整字号刻度，逐档调校字重、行高、字距（系统字体，保证离线可构建） |
+| 形状 | `Shape.kt` | 8 / 12 / 16 / 22 / 28 dp 圆角刻度，注入 `MaterialTheme.shapes` |
+| 主题 | `Theme.kt` | `ExtendedColors`（气泡 / 工具调用 / 品牌渐变）+ `brandBrush()` 翡翠→青绿线性渐变 |
+
+### 品牌识别
+
+- `BrandMark`（`chat/components/Avatars.kt`）：品牌渐变圆形 + 实验烧瓶图标（`Icons.Filled.Science`），作为 LabSage 助手身份贯穿全 App——顶栏、消息头像、空状态、设置页头部。
+- `UserAvatar`：中性 `secondaryContainer` 圆形 + `Person` 图标。
+
+### 各界面要点
+
+| 界面 | 重构要点 |
+|------|---------|
+| 会话列表 | 品牌字标头部（Logo + 副标题）、填充式圆角搜索框、浮动「新会话」ExtendedFAB、卡片渐变头像与置顶态、更温暖的空状态 |
+| 聊天 | 助手 / 用户头像、非对称气泡尾角、主题化的离线 / 完成横幅、精炼顶栏 |
+| 输入栏 | 胶囊形输入框、精炼快捷 Chip、**品牌渐变圆形发送键**（禁用态扁平置灰） |
+| 工具执行面板 | 图标式状态徽标取代裸字符、缩放呼吸的输入指示气泡、主题化错误 / 重试横幅 |
+| 设置 | 品牌头部卡、各分区带前置图标的卡片、分段式主题选择器（带勾选徽标） |
+
+### 设计决策
+
+| 决策 | 选择 | 原因 |
+|------|------|------|
+| 字体 | 系统字体（Roboto） | 不内嵌字体文件，保证离线 / 无网可构建；靠刻度与字重打磨质感 |
+| 品牌色 | 翡翠 / 青绿（teal） | 保留原有品牌识别（LabSage ≈ 鼠尾草绿），同时提升暗色档位深度 |
+| 头像 | 组合式（渐变 + 矢量图标） | 无需新增 PNG 资源即可获得品牌标识，矢量随主题无损缩放 |
+
+> 该次重构已通过 `:app:compileDebugKotlin` 与 `:app:assembleDebug` 双重验证。

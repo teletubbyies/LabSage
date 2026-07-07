@@ -39,7 +39,6 @@ import com.labsage.app.domain.model.ToolCallUi
 /**
  * Collapsible tool-execution panel rendered as a vertical timeline of tool calls.
  *
- * Replaces the old free-form [TracePanel] (which only printed raw trace text).
  * Each tool call is an expandable card showing its status, duration, args and
  * result summary. Driven by [ChatViewModel.toolCalls] / [activeRoute].
  */
@@ -60,13 +59,13 @@ fun ToolExecutionPanel(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(14.dp),
-        color = scheme.surfaceVariant.copy(alpha = 0.5f)
+        shape = RoundedCornerShape(16.dp),
+        color = scheme.surfaceVariant.copy(alpha = 0.6f)
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
             // Header
             Row(
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(Icons.Default.Build, null, Modifier.size(16.dp), tint = scheme.primary)
@@ -78,20 +77,26 @@ fun ToolExecutionPanel(
                 )
                 if (route != null) {
                     Spacer(Modifier.width(8.dp))
-                    AssistChip(
-                        onClick = {},
-                        label = { Text(route, style = MaterialTheme.typography.labelSmall) },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = scheme.primaryContainer,
-                            labelColor = scheme.onPrimaryContainer
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = scheme.primaryContainer
+                    ) {
+                        Text(
+                            route,
+                            Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = scheme.onPrimaryContainer,
+                            fontWeight = FontWeight.Medium
                         )
-                    )
+                    }
                 }
                 Spacer(Modifier.weight(1f))
-                // Compact status summary: ✓2 ⏳1 ✕0
-                StatusBadge("✓", completed, scheme.primary)
-                if (calling > 0) StatusBadge("⏳", calling, scheme.tertiary)
-                if (failed > 0) StatusBadge("✕", failed, scheme.error)
+                // Compact status summary pills.
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (completed > 0) StatusBadge(Icons.Default.CheckCircle, completed, scheme.primary)
+                    if (calling > 0) StatusBadge(Icons.Default.HourglassEmpty, calling, scheme.tertiary)
+                    if (failed > 0) StatusBadge(Icons.Default.ErrorOutline, failed, scheme.error)
+                }
                 IconButton(onClick = { expanded = !expanded }, modifier = Modifier.size(28.dp)) {
                     Icon(
                         Icons.Default.ChevronRight, if (expanded) "收起" else "展开",
@@ -124,22 +129,22 @@ private fun ToolCallCard(call: ToolCallUi, isLast: Boolean) {
                 Box(
                     Modifier
                         .width(2.dp)
-                        .height(36.dp)
+                        .height(38.dp)
                         .background(scheme.outlineVariant)
                 )
             }
         }
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(12.dp))
         // Card body
         var showDetail by rememberSaveable(call.key) { mutableStateOf(false) }
         Surface(
             onClick = { showDetail = !showDetail },
-            modifier = Modifier.weight(1f).padding(bottom = if (isLast) 0.dp else 4.dp),
-            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.weight(1f).padding(bottom = if (isLast) 0.dp else 6.dp),
+            shape = RoundedCornerShape(12.dp),
             color = scheme.surface,
             tonalElevation = 0.dp
         ) {
-            Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "#${call.index} ${call.name}",
@@ -153,7 +158,7 @@ private fun ToolCallCard(call: ToolCallUi, isLast: Boolean) {
                     StatusChip(call)
                 }
                 if (call.durationMs > 0) {
-                    Spacer(Modifier.height(2.dp))
+                    Spacer(Modifier.height(3.dp))
                     Text(
                         "${call.durationMs} ms",
                         style = MaterialTheme.typography.labelSmall,
@@ -166,7 +171,7 @@ private fun ToolCallCard(call: ToolCallUi, isLast: Boolean) {
                             DetailBlock("输入参数", call.argsText)
                         }
                         if (call.resultText.isNotBlank()) {
-                            Spacer(Modifier.height(4.dp))
+                            Spacer(Modifier.height(6.dp))
                             DetailBlock("输出摘要", call.resultText)
                         }
                         if (call.argsText.isBlank() && call.resultText.isBlank()) {
@@ -207,7 +212,7 @@ private fun TimelineNode(status: ToolCallStatus) {
     )
     val tint = if (status == ToolCallStatus.CALLING) color.copy(alpha = alpha) else color
     Box(
-        Modifier.size(18.dp).clip(CircleShape).background(color.copy(alpha = 0.15f)),
+        Modifier.size(18.dp).clip(CircleShape).background(color.copy(alpha = 0.16f)),
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, null, Modifier.size(14.dp), tint = tint)
@@ -223,12 +228,12 @@ private fun StatusChip(call: ToolCallUi) {
         ToolCallStatus.CALLING -> "调用中" to scheme.tertiary
     }
     Surface(
-        shape = RoundedCornerShape(6.dp),
-        color = color.copy(alpha = 0.15f)
+        shape = RoundedCornerShape(7.dp),
+        color = color.copy(alpha = 0.16f)
     ) {
         Text(
             label,
-            Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+            Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
             style = MaterialTheme.typography.labelSmall.copy(color = color, fontWeight = FontWeight.Medium)
         )
     }
@@ -243,15 +248,15 @@ private fun DetailBlock(label: String, content: String) {
             style = MaterialTheme.typography.labelSmall,
             color = scheme.onSurfaceVariant
         )
-        Spacer(Modifier.height(2.dp))
+        Spacer(Modifier.height(3.dp))
         Surface(
-            shape = RoundedCornerShape(6.dp),
-            color = scheme.surfaceVariant.copy(alpha = 0.7f),
+            shape = RoundedCornerShape(8.dp),
+            color = scheme.surfaceVariant,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
                 content,
-                Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
                 style = MaterialTheme.typography.labelSmall.copy(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp
@@ -263,16 +268,14 @@ private fun DetailBlock(label: String, content: String) {
 }
 
 @Composable
-private fun StatusBadge(symbol: String, count: Int, color: Color) {
-    if (count == 0) return
-    val scheme = MaterialTheme.colorScheme
+private fun StatusBadge(icon: ImageVector, count: Int, color: Color) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(symbol, style = MaterialTheme.typography.labelSmall, color = color)
+        Icon(icon, null, Modifier.size(13.dp), tint = color)
+        Spacer(Modifier.width(3.dp))
         Text(
             "$count",
             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-            color = scheme.onSurface
+            color = color
         )
-        Spacer(Modifier.width(6.dp))
     }
 }

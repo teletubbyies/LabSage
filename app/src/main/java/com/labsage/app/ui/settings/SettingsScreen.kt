@@ -1,23 +1,31 @@
 package com.labsage.app.ui.settings
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -29,6 +37,7 @@ import com.labsage.app.LabSageApplication
 import com.labsage.app.domain.model.AppSettings
 import com.labsage.app.domain.model.QuickAction
 import com.labsage.app.domain.model.ThemeMode
+import com.labsage.app.ui.chat.components.BrandMark
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,10 +52,10 @@ fun SettingsScreen(onBack: () -> Unit) {
         containerColor = scheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("设置", fontWeight = FontWeight.SemiBold, color = scheme.onBackground) },
+                title = { Text("设置", fontWeight = FontWeight.SemiBold, color = scheme.onSurface) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = scheme.onBackground)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = scheme.onSurface)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = scheme.surface)
@@ -58,11 +67,45 @@ fun SettingsScreen(onBack: () -> Unit) {
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Brand header
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                color = scheme.surface,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.5.dp
+            ) {
+                Row(
+                    Modifier.padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    BrandMark(size = 48.dp)
+                    Spacer(Modifier.width(14.dp))
+                    Column {
+                        Text(
+                            "LabSage",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = scheme.onSurface
+                        )
+                        Text(
+                            "实验室智能助手 · v1.0",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
             // ---------- Backend address ----------
-            SectionCard(title = "后端地址", subtitle = "修改后新请求即时生效，无需重启") {
+            SectionCard(
+                title = "后端地址",
+                subtitle = "修改后新请求即时生效，无需重启",
+                icon = Icons.Default.DesktopWindows
+            ) {
                 var url by remember(settings.baseUrl) { mutableStateOf(settings.baseUrl) }
                 OutlinedTextField(
                     value = url,
@@ -75,20 +118,25 @@ fun SettingsScreen(onBack: () -> Unit) {
                         keyboardType = KeyboardType.Uri,
                         capitalization = KeyboardCapitalization.None
                     ),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = scheme.primary)
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = scheme.primary,
+                        cursorColor = scheme.primary
+                    )
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Button(
                         onClick = { viewModel.setBaseUrl(url) },
                         enabled = url.trim() != settings.baseUrl && url.isNotBlank(),
+                        shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = scheme.primary)
                     ) { Text("保存") }
                     Spacer(Modifier.width(10.dp))
                     OutlinedButton(
                         onClick = { viewModel.testConnection(url) },
-                        enabled = url.isNotBlank()
+                        enabled = url.isNotBlank(),
+                        shape = RoundedCornerShape(12.dp)
                     ) { Text("测试连接") }
                 }
                 Spacer(Modifier.height(6.dp))
@@ -96,12 +144,20 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
 
             // ---------- Appearance ----------
-            SectionCard(title = "外观", subtitle = "暗黑模式已支持系统跟随，可手动覆盖") {
+            SectionCard(
+                title = "外观",
+                subtitle = "可跟随系统暗黑模式，也可手动指定",
+                icon = Icons.Default.Palette
+            ) {
                 ThemePicker(settings.themeMode, viewModel::setThemeMode)
             }
 
             // ---------- Model ----------
-            SectionCard(title = "模型", subtitle = "实验性 · 需后端配合读取生效") {
+            SectionCard(
+                title = "模型",
+                subtitle = "实验性 · 需后端配合读取生效",
+                icon = Icons.Default.Tune
+            ) {
                 var expanded by remember { mutableStateOf(false) }
                 var model by remember(settings.model) { mutableStateOf(settings.model) }
                 Box {
@@ -113,15 +169,18 @@ fun SettingsScreen(onBack: () -> Unit) {
                         label = { Text("首选模型") },
                         trailingIcon = {
                             IconButton(onClick = { expanded = true }) {
-                                Icon(Icons.Filled.DesktopWindows, "选择", tint = scheme.onSurfaceVariant)
+                                Icon(Icons.Filled.PlayCircle, "选择", tint = scheme.onSurfaceVariant)
                             }
                         },
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(14.dp)
                     )
                     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                         AppSettings.MODEL_OPTIONS.forEach { option ->
                             DropdownMenuItem(
                                 text = { Text(option) },
+                                trailingIcon = {
+                                    if (option == model) Icon(Icons.Default.CheckCircle, null, tint = scheme.primary)
+                                },
                                 onClick = {
                                     model = option
                                     viewModel.setModel(option)
@@ -134,7 +193,11 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
 
             // ---------- Approval mode ----------
-            SectionCard(title = "工具审批模式", subtitle = "开启后，发送消息前需确认（防误触发工具调用）") {
+            SectionCard(
+                title = "工具审批模式",
+                subtitle = "开启后，发送消息前需确认（防误触发工具调用）",
+                icon = Icons.Default.Verified
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Verified, null, Modifier.size(20.dp), tint = scheme.primary)
                     Spacer(Modifier.width(10.dp))
@@ -144,38 +207,56 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
 
             // ---------- Default quick actions ----------
-            SectionCard(title = "默认快捷操作", subtitle = "输入栏显示的快捷按钮") {
+            SectionCard(
+                title = "默认快捷操作",
+                subtitle = "输入栏显示的快捷按钮",
+                icon = Icons.Default.Bolt
+            ) {
                 QuickActionToggle("GPU 状态", Icons.Filled.Memory, QuickAction.GPU, settings.quickActions, viewModel::toggleQuickAction)
+                Spacer(Modifier.height(6.dp))
                 QuickActionToggle("Conda 环境", Icons.Filled.Terminal, QuickAction.CONDA, settings.quickActions, viewModel::toggleQuickAction)
             }
 
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "LabSage ${"·"} 设置即时持久化（DataStore）",
-                style = MaterialTheme.typography.labelSmall,
-                color = scheme.onSurfaceVariant
-            )
+            Spacer(Modifier.height(12.dp))
         }
     }
 }
 
 @Composable
-private fun SectionCard(title: String, subtitle: String?, content: @Composable ColumnScope.() -> Unit) {
+private fun SectionCard(
+    title: String,
+    subtitle: String?,
+    icon: ImageVector,
+    content: @Composable ColumnScope.() -> Unit
+) {
     val scheme = MaterialTheme.colorScheme
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
         color = scheme.surface,
         tonalElevation = 0.dp,
         shadowElevation = 0.5.dp
     ) {
-        Column(Modifier.padding(16.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold), color = scheme.onSurface)
-            if (subtitle != null) {
-                Spacer(Modifier.height(2.dp))
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Column(Modifier.padding(18.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(scheme.primaryContainer.copy(alpha = 0.7f), RoundedCornerShape(10.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon, null, Modifier.size(19.dp), tint = scheme.primary)
+                }
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(title, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold), color = scheme.onSurface)
+                    if (subtitle != null) {
+                        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
             }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(16.dp))
             content()
         }
     }
@@ -194,7 +275,7 @@ private fun ConnectionStatus(state: SettingsViewModel.ConnectionState) {
         is SettingsViewModel.ConnectionState.Ok -> Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.CheckCircle, null, Modifier.size(16.dp), tint = scheme.primary)
             Spacer(Modifier.width(6.dp))
-            Text("连接成功 · ${state.latencyMs} ms", style = MaterialTheme.typography.bodySmall, color = scheme.primary)
+            Text("连接成功 · ${state.latencyMs} ms", style = MaterialTheme.typography.bodySmall, color = scheme.primary, fontWeight = FontWeight.Medium)
         }
         is SettingsViewModel.ConnectionState.Failed -> Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.CloudOff, null, Modifier.size(16.dp), tint = scheme.error)
@@ -207,29 +288,54 @@ private fun ConnectionStatus(state: SettingsViewModel.ConnectionState) {
 @Composable
 private fun ThemePicker(current: ThemeMode, onSelect: (ThemeMode) -> Unit) {
     val scheme = MaterialTheme.colorScheme
-    data class Option(val mode: ThemeMode, val icon: androidx.compose.ui.graphics.vector.ImageVector, val label: String)
+    data class Option(val mode: ThemeMode, val icon: ImageVector, val label: String)
     val options = listOf(
         Option(ThemeMode.SYSTEM, Icons.Filled.DesktopWindows, "跟随系统"),
         Option(ThemeMode.LIGHT, Icons.Filled.LightMode, "浅色"),
         Option(ThemeMode.DARK, Icons.Filled.DarkMode, "深色")
     )
 
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         options.forEach { (mode, icon, label) ->
             val selected = current == mode
             Surface(
                 onClick = { onSelect(mode) },
                 modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(12.dp),
-                color = if (selected) scheme.primaryContainer else scheme.surfaceVariant.copy(alpha = 0.5f)
+                shape = RoundedCornerShape(14.dp),
+                color = if (selected) scheme.primaryContainer else scheme.surfaceVariant,
+                border = if (selected) androidx.compose.foundation.BorderStroke(2.dp, scheme.primary) else null
             ) {
                 Column(
-                    Modifier.padding(vertical = 12.dp),
+                    Modifier.padding(vertical = 16.dp).fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Icon(icon, null, tint = if (selected) scheme.primary else scheme.onSurfaceVariant)
-                    Spacer(Modifier.height(4.dp))
-                    Text(label, style = MaterialTheme.typography.labelMedium, color = if (selected) scheme.onPrimaryContainer else scheme.onSurfaceVariant)
+                    Box(
+                        Modifier.size(40.dp).clip(CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            icon, null,
+                            modifier = Modifier.size(24.dp),
+                            tint = if (selected) scheme.primary else scheme.onSurfaceVariant
+                        )
+                        if (selected) {
+                            Icon(
+                                Icons.Filled.CheckCircle, null,
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .align(Alignment.BottomEnd)
+                                    .clip(CircleShape),
+                                tint = scheme.primary
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (selected) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                    )
                 }
             }
         }
@@ -239,7 +345,7 @@ private fun ThemePicker(current: ThemeMode, onSelect: (ThemeMode) -> Unit) {
 @Composable
 private fun QuickActionToggle(
     label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     action: QuickAction,
     enabled: List<QuickAction>,
     onToggle: (QuickAction) -> Unit

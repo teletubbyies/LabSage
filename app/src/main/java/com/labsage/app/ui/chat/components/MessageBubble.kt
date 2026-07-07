@@ -35,34 +35,36 @@ fun MessageBubble(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 5.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Bottom
     ) {
-        if (isUser) {
-            Spacer(Modifier.weight(0.15f))
+        // Avatar on the outside; bubble fills toward the opposite side.
+        if (!isUser) {
+            BrandMark(size = 30.dp)
+            Spacer(Modifier.width(8.dp))
         }
 
         Column(
-            modifier = Modifier.weight(0.85f, fill = false),
+            modifier = Modifier.widthIn(max = 300.dp),
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
         ) {
             // Inline trace (assistant only, during streaming)
             if (!isUser && traceLines.isNotEmpty() && isStreaming) {
                 InlineTraceChip(traceLines)
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(5.dp))
             }
 
-            // Bubble
+            // Bubble — asymmetric tail corner points toward the avatar side.
             Surface(
                 shape = RoundedCornerShape(
-                    topStart = 20.dp,
-                    topEnd = 20.dp,
-                    bottomStart = if (isUser) 20.dp else 4.dp,
-                    bottomEnd = if (isUser) 4.dp else 20.dp
+                    topStart = 18.dp,
+                    topEnd = 18.dp,
+                    bottomStart = if (isUser) 18.dp else 5.dp,
+                    bottomEnd = if (isUser) 5.dp else 18.dp
                 ),
                 color = if (isUser) ext.userBubble else ext.assistantBubble,
-                shadowElevation = 1.dp,
+                shadowElevation = if (isUser) 0.dp else 0.5.dp,
                 tonalElevation = 0.dp
             ) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
@@ -83,8 +85,9 @@ fun MessageBubble(
                         Text(
                             text = content.ifEmpty { "Thinking" },
                             color = if (isUser) ext.userBubbleOn else ext.assistantBubbleOn,
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                lineHeight = 22.sp, letterSpacing = 0.2.sp
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                lineHeight = 22.sp,
+                                letterSpacing = 0.1.sp
                             )
                         )
                     }
@@ -92,8 +95,9 @@ fun MessageBubble(
             }
         }
 
-        if (!isUser) {
-            Spacer(Modifier.weight(0.15f))
+        if (isUser) {
+            Spacer(Modifier.width(8.dp))
+            UserAvatar(size = 30.dp)
         }
     }
 }
@@ -126,18 +130,18 @@ private fun InlineTraceChip(traceLines: List<String>) {
 
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .then(
-                Modifier.background(ext.inlineTraceBg, RoundedCornerShape(12.dp))
-            )
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .clip(RoundedCornerShape(10.dp))
+            .background(ext.inlineTraceBg, RoundedCornerShape(10.dp))
+            .padding(horizontal = 9.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, null, Modifier.size(12.dp), tint = scheme.primary)
-        Spacer(Modifier.width(4.dp))
+        Icon(icon, null, Modifier.size(13.dp), tint = scheme.primary)
+        Spacer(Modifier.width(5.dp))
         Text(
             text, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, color = scheme.primary, fontWeight = FontWeight.Medium)
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 11.sp, color = scheme.primary, fontWeight = FontWeight.Medium
+            )
         )
     }
 }
@@ -157,7 +161,7 @@ fun ThinkingDots() {
                 animationSpec = infiniteRepeatable(tween(500, delayMillis = i * 200), RepeatMode.Reverse),
                 label = "dot$i"
             )
-            Box(Modifier.size(5.dp).clip(CircleShape).then(Modifier.background(scheme.primary.copy(alpha = alpha))))
+            Box(Modifier.size(5.dp).clip(CircleShape).background(scheme.primary.copy(alpha = alpha)))
         }
     }
 }

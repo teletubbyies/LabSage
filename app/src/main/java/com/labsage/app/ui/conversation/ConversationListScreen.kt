@@ -1,5 +1,8 @@
 package com.labsage.app.ui.conversation
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -20,6 +24,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.labsage.app.LabSageApplication
 import com.labsage.app.data.local.entity.ConversationEntity
+import com.labsage.app.ui.chat.components.BrandMark
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -50,39 +55,69 @@ fun ConversationListScreen(
         containerColor = scheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("LabSage", fontWeight = FontWeight.Bold, color = scheme.onBackground) },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        BrandMark(size = 32.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                "LabSage",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = scheme.onBackground
+                            )
+                            Text(
+                                "实验室智能助手",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = scheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                },
                 actions = {
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, "设置", tint = scheme.onSurfaceVariant)
                     }
-                    IconButton(onClick = { onNewConversation(viewModel.createNewConversation()) }) {
-                        Icon(Icons.Default.Add, "New chat", tint = scheme.onSurfaceVariant)
-                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = scheme.surface)
+            )
+        },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = { onNewConversation(viewModel.createNewConversation()) },
+                containerColor = scheme.primary,
+                contentColor = scheme.onPrimary,
+                shape = RoundedCornerShape(18.dp),
+                icon = { Icon(Icons.Default.Edit, "新会话") },
+                text = { Text("新会话", fontWeight = FontWeight.SemiBold) }
             )
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            // Search bar — always visible, filters by title.
+            // Search bar — filled, rounded, always visible.
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = viewModel::setSearchQuery,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
                 placeholder = { Text("搜索会话标题", color = scheme.onSurfaceVariant) },
                 leadingIcon = { Icon(Icons.Default.Search, null, tint = scheme.onSurfaceVariant) },
                 trailingIcon = {
-                    if (isSearching) {
+                    AnimatedVisibility(visible = isSearching, enter = fadeIn(), exit = fadeOut()) {
                         IconButton(onClick = { viewModel.setSearchQuery("") }) {
                             Icon(Icons.Default.Close, "清除", tint = scheme.onSurfaceVariant)
                         }
                     }
                 },
                 singleLine = true,
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = scheme.primary,
-                    unfocusedBorderColor = scheme.outlineVariant
+                    focusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
+                    unfocusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
+                    focusedContainerColor = scheme.surfaceVariant,
+                    unfocusedContainerColor = scheme.surfaceVariant,
+                    cursorColor = scheme.primary
                 )
             )
 
@@ -90,12 +125,16 @@ fun ConversationListScreen(
                 conversations.isEmpty() && !isSearching -> EmptyState { onNewConversation(viewModel.createNewConversation()) }
                 conversations.isEmpty() && isSearching -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("未找到匹配的会话", color = scheme.onSurfaceVariant)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.SearchOff, null, tint = scheme.onSurfaceVariant, modifier = Modifier.size(40.dp))
+                            Spacer(Modifier.height(10.dp))
+                            Text("未找到匹配的会话", color = scheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                        }
                     }
                 }
                 else -> LazyColumn(
                     Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(vertical = 4.dp)
+                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 88.dp)
                 ) {
                     groups.forEach { group ->
                         if (group.title.isNotEmpty()) {
@@ -121,6 +160,7 @@ fun ConversationListScreen(
         var text by remember(conv.id) { mutableStateOf(conv.title) }
         AlertDialog(
             onDismissRequest = { renaming = null },
+            icon = { Icon(Icons.Default.Edit, null, tint = scheme.primary) },
             title = { Text("重命名会话", fontWeight = FontWeight.SemiBold) },
             text = {
                 OutlinedTextField(
@@ -129,7 +169,11 @@ fun ConversationListScreen(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     label = { Text("标题") },
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = scheme.primary)
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = scheme.primary,
+                        cursorColor = scheme.primary
+                    )
                 )
             },
             confirmButton = {
@@ -139,6 +183,7 @@ fun ConversationListScreen(
                         renaming = null
                     },
                     enabled = text.isNotBlank(),
+                    shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = scheme.primary)
                 ) { Text("保存") }
             },
@@ -150,20 +195,32 @@ fun ConversationListScreen(
 @Composable
 private fun EmptyState(onStart: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Surface(shape = RoundedCornerShape(20.dp), color = scheme.primaryContainer, modifier = Modifier.size(64.dp)) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Icon(Icons.AutoMirrored.Filled.Chat, null, tint = scheme.primary, modifier = Modifier.size(28.dp))
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-            Text("No conversations yet", style = MaterialTheme.typography.titleMedium, color = scheme.onSurfaceVariant)
-            Spacer(Modifier.height(4.dp))
-            Text("Tap + to start a new chat", style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+            BrandMark(size = 72.dp)
             Spacer(Modifier.height(20.dp))
-            Button(onClick = onStart, colors = ButtonDefaults.buttonColors(containerColor = scheme.primary), shape = RoundedCornerShape(12.dp)) {
-                Text("Start Chat")
+            Text(
+                "开启你的第一次对话",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = scheme.onBackground
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "向 LabSage 提问 GPU、Conda 环境或任何实验问题",
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+            Spacer(Modifier.height(22.dp))
+            Button(
+                onClick = onStart,
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = scheme.primary)
+            ) {
+                Icon(Icons.Default.Add, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("开始新会话", fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -177,18 +234,19 @@ private fun GroupHeader(title: String) {
         else -> title to null
     }
     Row(
-        Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 4.dp),
+        Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 14.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (icon != null) {
-            Icon(icon, null, Modifier.size(14.dp), tint = scheme.primary)
-            Spacer(Modifier.width(4.dp))
+            Icon(icon, null, Modifier.size(13.dp), tint = scheme.primary)
+            Spacer(Modifier.width(5.dp))
         }
         Text(
             label,
-            style = MaterialTheme.typography.labelMedium.copy(
+            style = MaterialTheme.typography.labelLarge.copy(
                 fontWeight = FontWeight.SemiBold,
-                color = scheme.onSurfaceVariant
+                color = scheme.onSurfaceVariant,
+                letterSpacing = 0.8.sp
             )
         )
     }
@@ -209,19 +267,31 @@ private fun ConversationItem(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 3.dp)
+            .padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
-        color = if (conv.isPinned) scheme.primaryContainer.copy(alpha = 0.4f) else scheme.surface,
-        shadowElevation = 0.5.dp
+        shape = RoundedCornerShape(16.dp),
+        color = if (conv.isPinned) scheme.primaryContainer.copy(alpha = 0.45f) else scheme.surface,
+        shadowElevation = if (conv.isPinned) 0.dp else 0.5.dp,
+        tonalElevation = 0.dp
     ) {
         Row(
-            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Surface(shape = RoundedCornerShape(12.dp), color = scheme.primaryContainer, modifier = Modifier.size(44.dp)) {
+            // Leading avatar
+            Surface(
+                shape = RoundedCornerShape(13.dp),
+                color = if (conv.isPinned) scheme.primaryContainer else scheme.surfaceVariant,
+                modifier = Modifier.size(44.dp)
+            ) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Icon(Icons.AutoMirrored.Filled.Chat, null, Modifier.size(20.dp), tint = scheme.primary)
+                    Icon(
+                        Icons.AutoMirrored.Filled.Chat,
+                        null,
+                        Modifier.size(20.dp),
+                        tint = scheme.primary
+                    )
                 }
             }
             Spacer(Modifier.width(12.dp))
@@ -229,24 +299,28 @@ private fun ConversationItem(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (conv.isPinned) {
                         Icon(Icons.Default.PushPin, null, Modifier.size(13.dp), tint = scheme.primary)
-                        Spacer(Modifier.width(4.dp))
+                        Spacer(Modifier.width(5.dp))
                     }
                     Text(
                         conv.title,
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium, fontSize = 15.sp),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        color = scheme.onBackground,
+                        color = scheme.onSurface,
                         modifier = Modifier.weight(1f)
                     )
                 }
-                Spacer(Modifier.height(2.dp))
-                Text(fmt.format(Date(conv.updatedAt)), style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    fmt.format(Date(conv.updatedAt)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = scheme.onSurfaceVariant
+                )
             }
             // Overflow menu
             Box {
                 IconButton(onClick = { showMenu = true }, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.MoreVert, "更多", Modifier.size(16.dp), tint = scheme.onSurfaceVariant)
+                    Icon(Icons.Default.MoreVert, "更多", Modifier.size(18.dp), tint = scheme.onSurfaceVariant)
                 }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                     DropdownMenuItem(
