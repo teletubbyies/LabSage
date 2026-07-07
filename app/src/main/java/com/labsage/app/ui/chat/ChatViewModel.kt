@@ -11,6 +11,7 @@ import com.labsage.app.data.repository.SettingsRepository
 import com.labsage.app.domain.model.StreamState
 import com.labsage.app.domain.model.ToolCallStatus
 import com.labsage.app.domain.model.ToolCallUi
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -36,6 +37,7 @@ class ChatViewModel(
     // UI State (observed by Compose)
     // ============================================================
 
+    // used in class inside， unseen outside.
     private val _messages = MutableStateFlow<List<MessageUiState>>(emptyList())
     val messages: StateFlow<List<MessageUiState>> = _messages.asStateFlow()
 
@@ -154,7 +156,7 @@ class ChatViewModel(
         lastQuestion = question
 
         viewModelScope.launch {
-            // CRITICAL: create conversation BEFORE inserting messages (FK constraint)
+            // CRITICAL(checked): create conversation BEFORE inserting messages (Foreign Key constraint in db)
             repository.upsertConversation(conversationId, deriveTitle(question))
             // Now persist user message
             repository.saveUserMessage(conversationId, question)

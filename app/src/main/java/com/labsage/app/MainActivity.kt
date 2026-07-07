@@ -63,8 +63,8 @@ fun LabSageNavGraph() {
     val navController = rememberNavController()
 
     NavHost(
-        navController = navController,
-        startDestination = NavRoutes.CONVERSATION_LIST
+        navController = navController, // control navigation
+        startDestination = NavRoutes.CONVERSATION_LIST // 1st displayed view
     ) {
         composable(NavRoutes.CONVERSATION_LIST) {
             ConversationListScreen(

@@ -65,11 +65,13 @@ data: Stream completed
 
 ## 二、SSE 解析实现 — 面试重点
 
-### 自定义 Flow CallAdapter 的实现细节
+### SSE → Flow 的桥接实现细节
 
-这是简历中的核心技术亮点。实现拆解为两层：
+这是简历中的核心技术亮点。生产链路用 **OkHttp `okhttp-sse` 的 `EventSources` 做协议解析 + `callbackFlow` 桥接为 Flow**（**不使用 Retrofit CallAdapter**——Retrofit 为"请求-响应"设计，对 SSE 长连接无增值）。下面两个组件分别覆盖"理解协议"与"生产桥接"：
 
-#### 第一层：SseParser（纯函数行解析器）
+#### SseParser（手写纯函数行解析器 — 学习/备选，未接入运行链路）
+
+> ⚠️ 该解析器是为理解 SSE 协议而写的备选实现，**生产并未调用**——`okhttp-sse` 的 `EventSources` 已内置协议解析，直接把解析好的 `onEvent(type, data)` 喂给回调。保留它是作为面试展开素材。
 
 ```kotlin
 class SseParser {
@@ -103,7 +105,7 @@ class SseParser {
 - 如何防止内存泄漏？→ `dataLines` 单次事件的 `joinToString` 后立即清空
 - 为什么 `okhttp-sse` 的 EventSourceListener 已经做了行解析，还需要 SseParser？→ `okhttp-sse` 库已经处理了 SSE 行解析；这里 SseParser 是备选方案，展示理解深度
 
-#### 第二层：OkHttpSseDataSource（callbackFlow 桥接）
+#### OkHttpSseDataSource（callbackFlow 桥接 — 生产实现）
 
 ```kotlin
 class OkHttpSseDataSource : SseDataSource {
@@ -136,22 +138,25 @@ class OkHttpSseDataSource : SseDataSource {
 | 阶段 | 渲染方式 | 原因 |
 |------|---------|------|
 | 流式进行中 | `Text(text = content)` 纯文本 | Markdown 不完整时（如未闭合的代码块）会导致渲染异常 |
-| 流式完成后 | `com.mikepenz.markdown.m3.Markdown(content)` | 完整 Markdown 渲染，含代码高亮 |
+| 流式完成后 | `dev.jeziellago.compose.markdowntext.MarkdownText(markdown = content)` | 完整 Markdown 渲染，含代码块/表格/链接 |
 
-### LazyColumn 自动滚底
+### LazyColumn 自动滚底（双策略）
 
 ```kotlin
 val listState = rememberLazyListState()
-LaunchedEffect(messages.size, messages.lastOrNull()?.content) {
-    if (messages.isNotEmpty()) {
-        listState.animateScrollToItem(messages.size - 1)
-    }
+// 新消息到达：平滑动画滚底
+LaunchedEffect(messages.size) {
+    if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+}
+// 流式 chunk 更新：snap 即时滚底（避免逐 chunk 动画卡顿）
+LaunchedEffect(messages.lastOrNull()?.content) {
+    if (isStreaming && messages.isNotEmpty()) listState.scrollToItem(messages.size - 1)
 }
 ```
 
 **面试考点**：
-- 为什么 `LaunchedEffect` 的 key 包含 `lastOrNull()?.content`？→ 需要追踪最后一条消息的内容变化（流式逐 chunk 更新），而不仅仅是消息数量变化
-- 为什么用 `animateScrollToItem` 而不是 `scrollToItem`？→ 平滑过渡更自然，避免突兀跳动
+- 为什么拆成两个 `LaunchedEffect`？→ 新消息用 `animateScrollToItem` 平滑过渡；流式逐 chunk 更新频率高达 ~50/s，每帧都 animate 会卡顿，改用 `scrollToItem` snap 即时定位
+- 为什么第二个 `LaunchedEffect` 的 key 是 `lastOrNull()?.content`？→ 需要追踪最后一条消息的内容变化（流式逐 chunk 更新），而不仅是消息数量变化
 
 ---
 
@@ -274,8 +279,8 @@ val sseClient = baseClient.newBuilder()
 | 网络 | OkHttp (SSE) + Retrofit (REST) | "SSE 长连接与短请求分离：长连接用 OkHttp 直连 0 超时，短请求用 Retrofit 30s 超时" |
 | 存储 | Room | "conversation + message 双表 FK 级联，流式内容 INSERT 后逐 chunk UPDATE" |
 | 状态 | StateFlow + sealed class | "sealed class 建模状态机，StateFlow 承载，Compose collectAsStateWithLifecycle 消费" |
-| DI | 手动 | "依赖图简单（~5 个单例），手动 DI 比 Hilt 更透明且无编译时开销" |
-| Markdown | mikepenz M3 | "纯 Compose 渲染，无 WebView 开销，流式完成后全量渲染" |
+| DI | 手动 | "依赖图简单（约 10 个 `by lazy` 单例、~210 行），手动 DI 比 Hilt 更透明且无编译时开销" |
+| Markdown | jeziellago/compose-markdown 0.5.7 | "纯 Compose 渲染，无 WebView 开销，流式完成后全量渲染（mikepenz 系因 Compose Runtime 版本不兼容而弃用）" |
 | Trace 展示 | 内联 InlineTraceSummary | "SSE trace 事件在 assistant 头像旁实时显示'Calling xxx'/'Tool completed'，正式输出后隐藏" |
 | 网络监控 | ConnectivityManager | "NetworkCallback + DisposableEffect，断网时顶部横幅提示，不影响已加载内容" |
 
@@ -353,26 +358,31 @@ fun InlineTraceSummary(traceLines: List<String>) {
 - `@Immutable` vs `@Stable`：Immutable 保证所有属性 final + 不可变；Stable 允许 mutable 但变化可被追踪
 - `derivedStateOf` vs `remember(key)`：derivedStateOf 在读取时才计算，适合从其他 State 派生；remember(key) 在 key 变化时重建
 
-## 十一、callbackFlow 背压与 trySend 陷阱（实战 Bug）
+## 十一、callbackFlow 背压与 trySend 陷阱（实战 Bug，见 BUGFIX_LOG #11/#13）
 
 ### 问题
 `callbackFlow` 默认 buffer = 64。SSE 工具查询产生 200+ 条 trace 事件，`trySend()` 在 buffer 满后静默丢弃，包括后续的 `message` 和 `done` 事件，导致流式输出中断。
 
-### 修复：事件过滤
+### 三级修复
 ```
-原始事件流: connected → trace×200 → message×50 → trace_summary → done
-过滤后:     connected → trace×5(工具生命周期) → message×50 → trace_summary → done
+原始事件流:   connected → trace×200(自由文本) → message×50 → trace_summary → done
+Phase 1 过滤: connected → trace×3([tool]/[react]/[route] 结构化行) → message×50 → ... → done
+Phase 2 缓冲: callbackFlow { ... }.buffer(Channel.UNLIMITED)   // 兜底，防 message chunk + Room 写延迟再次溢出
+Phase 3 批写: Room updateContent 每 5 chunk 一次，Done 时 finalize
 ```
 
-过滤逻辑：
+过滤逻辑（按**结构化前缀**，非中文关键字子串——BUG #13：关键字匹配会漏掉措辞不同但同属生命周期的行）：
 ```kotlin
-if (event is SseEvent.Trace && !event.line.let { l ->
-    l.contains("调用工具") || l.contains("调用完成") || l.contains("route=")
-}) return  // 丢弃非关键的 trace
+if (event is SseEvent.Trace) {
+    val l = event.line
+    val keep = l.startsWith("[tool]") || l.startsWith("[react]") || l.startsWith("[route")
+    if (!keep) return  // 丢弃非结构化的自由文本 trace
+}
 ```
 
 ### 面试考点
 - `trySend` vs `send`：`trySend` 非阻塞、立即返回 `ChannelResult`，适合回调；`send` 挂起等待、保证交付，适合协程
 - Channel 容量策略：BUFFERED(64) / CONFLATED(1) / UNLIMITED 的选择场景
-- 为什么不用 `Channel.UNLIMITED`：993 条事件全部缓存 → 内存 GC 压力 + 消费者延迟
+- 为什么过滤后还敢用 `Channel.UNLIMITED`：过滤已把 200+ trace 砍到个位数，剩余主要是 message chunk（有界），UNLIMITED 只为兜底 Room 写入延迟导致的瞬时溢出，不会无限膨胀
+- 为什么不直接无脑 `UNLIMITED` 不过滤：993 条事件全部缓存 → 内存 GC 压力 + 消费者延迟
 - 为什么不在 `onEvent` 中 `launch { send() }`：增加协程创建开销，且顺序可能乱

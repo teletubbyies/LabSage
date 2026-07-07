@@ -41,7 +41,7 @@ interface ConversationDao {
 
     /** Update only title and timestamp without full entity replacement */
     @Query("UPDATE conversations SET title = :title, updated_at = :updatedAt WHERE id = :id")
-    suspend fun updateMeta(id: String, title: String, updatedAt: Long)
+    suspend fun  updateMeta(id: String, title: String, updatedAt: Long)
 
     /** Rename a conversation without bumping its updated_at (no reordering). */
     @Query("UPDATE conversations SET title = :title WHERE id = :id")
