@@ -43,7 +43,11 @@ class ConversationListViewModel(
     }
 
     fun deleteConversation(id: String) {
-        viewModelScope.launch { repository.deleteConversation(id) }
+        // Fire-and-forget, no need for answer, time to end.
+        // launch on main Thread on default.
+        viewModelScope.launch {
+            repository.deleteConversation(id)
+        }
     }
 
     fun togglePin(conversation: ConversationEntity) {

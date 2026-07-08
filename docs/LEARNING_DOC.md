@@ -301,3 +301,286 @@ class MySet<T>(val helperSet: HashSet<T>) : Set<T> by helperSet {
 - 委托属性的核心思想是将一个属性（字段）的具体实现委托给另一个类去完成。
 13. ViewModel
 - 存放与界面相关的数据
+14.  .
+     好，那我先铺垫几个最基础的概念，再逐种模式讲透。这些概念是理解"为什么"的地基，不然后面的每一条都会像凭空规定。
+
+---
+
+# 第一部分：先搞懂 3 个地基概念
+
+## 1. 协程是什么？`suspend` 又是什么？
+
+把协程想成**一个可以"按暂停键"的任务**。
+
+打个比方：你让一个人去烧水。如果是普通函数，他会**死等**在厨房盯着水壶，啥也不干，直到水开才回来交差——这就是"阻塞"。如果是协程，他可以对系统说"水要 5 分钟才开，**我先暂停在这里**，期间你去干别的，水开了再叫我回来继续"——这个"暂停点"就是 `suspend`。
+
+```kotlin
+suspend fun saveUserMessage(...)   // 这个函数会"暂停"等数据库写完
+```
+
+`suspend` 函数的特点：**它可能在执行中暂停、把线程让给别人用、之后再恢复**。所以它只能在协程里调用，不能在普通函数里直接调。
+
+## 2. 主线程是什么？为什么不能卡它？
+
+Android 有一个"主线程"（也叫 UI 线程），它负责两件事：**画屏幕** + **响应你的点击滑动**。
+
+主线程是**单线程**，一次只能做一件事。如果你让它在主线程上去做"写数据库"这种耗时操作，它就没空画屏幕了——屏幕卡住，点按钮没反应。卡超过 5 秒，系统会弹一个**"应用无响应"（ANR）**对话框，用户会觉得 app 崩了。
+
+所以铁律是：**耗时操作（网络、磁盘读写、大量计算）绝对不能在主线程跑。**
+
+## 3. `viewModelScope` 是什么？为什么用它？
+
+`viewModelScope` 是 ViewModel 自带的一个"协程容器"（scope）。你 `viewModelScope.launch { ... }` 就是"在这个容器里启动一个协程"。
+
+它有两个核心特性，**这是理解后面所有模式的关键**：
+
+**特性一：默认在主线程跑。**
+`launch { }` 块里的代码，默认就在主线程执行。这意味着你可以在里面直接更新 UI 状态（比如 `_messages.value = ...`），不用切线程。但也意味着——如果你在里面调一个不会自动切线程的耗时操作，就会卡住主线程。
+
+**特性二：跟 ViewModel 同生共死。**
+当你离开一个页面，对应的 ViewModel 会被销毁（调用 `onCleared()`）。这时 `viewModelScope` 会**自动取消里面所有正在跑的协程**。
+
+为什么这很重要？假设没有这个机制，你发了一条消息、SSE 流正在后台收数据，这时你退出页面——协程还在跑，它会去更新一个已经不存在的 UI，要么报错、要么内存泄漏。有了 `viewModelScope`，页面一关，所有任务自动停，干净利落。
+
+> 顺便回答一个你可能想问的：**为什么不直接用 `GlobalScope`（全局容器）？** 因为全局容器活得比页面长，页面销毁了协程还在跑，就泄漏了。`viewModelScope` 就是用来"限定寿命"的。
+
+---
+
+有了这三块地基，下面 5 种模式就好懂了。每种我都会讲：**它解决什么问题 → 代码 → 为什么这样写 → 不这样写会怎样**。
+
+---
+
+# 第二部分：5 种模式详解
+
+## 模式 A：Fire-and-forget 写操作（"派出去就不管了"）
+
+### 解决什么问题
+
+用户点了个按钮，比如"删除会话"。删除是写数据库，是 `suspend` 函数。但按钮的点击回调（`onClick`）是个普通函数，不能是 `suspend`。怎么在普通函数里调 `suspend` 函数？
+
+### 代码
+
+```kotlin
+// ConversationListViewModel.kt:45
+fun deleteConversation(id: String) {           // ← 普通函数，UI 直接调
+    viewModelScope.launch {                    // ← 包一层协程
+        repository.deleteConversation(id)      // ← suspend 调用放进去
+    }
+}
+```
+
+### 为什么这么写
+
+1. **`launch` 把 `suspend` 包起来**，这样外层的 `fun` 就能保持普通签名，UI 调用方不用关心协程。
+2. **不保存返回的 Job**：注意没写成 `val job = viewModelScope.launch {...}`。因为这种操作"派出去就完事"——删了就删了，不需要中途取消它。即使用户立刻退出页面，让删除跑完反而是你想要的（总不能点了删除又反悔）。
+3. **不用手动切线程**：你可能想"写数据库不是耗时吗？怎么不 `withContext(IO)`？"——因为 **Room 的 `suspend` 函数内部已经自己切到后台线程了**。你调它，它暂停、去后台干活、干完回主线程，全程不卡 UI。DataStore 同理。
+
+### 不这样写会怎样
+
+- 如果不包 `launch` 直接调：编译报错（普通函数里不能调 `suspend`）。
+- 如果用 `GlobalScope`：用户退出页面后这个协程还在跑，可能去更新一个已经销毁的 UI，泄漏。
+- 如果手动 `Thread { }.start()`：能跑，但要自己管线程、自己切回主线程更新 UI，麻烦且容易出错。
+
+**一句话**：这是"触发一次写、不关心结果、不管它什么时候结束"的标准写法。项目里 11 处都是这个模式。
+
+---
+
+## 模式 B：长生命周期的 Flow 收集（"持续监听数据库变化"）
+
+### 解决什么问题
+
+聊天页面要显示消息列表。消息存在数据库里，而且会**不断变化**（用户发新消息、流式接收时内容一直在变）。怎么让 UI 一直跟着数据库的最新状态走？
+
+Room 给你的是一个 `Flow`（数据流）。`Flow` 是"冷流"——**你不主动去 `collect`（收集）它，它就不工作**。就像订阅快递通知，你不订阅就收不到推送。
+
+### 代码
+
+```kotlin
+// ChatViewModel.kt:123-129
+init {
+    viewModelScope.launch {                              // ← 启动一个协程专门收集
+        repository.getMessages(conversationId)           // ← 拿到 Flow
+            .conflate()                                  // ← 丢弃中间值（见下）
+            .collect { entities ->                       // ← 持续监听，每次 DB 变化都回调
+                _messages.value = entities.map { it.toUiState() }
+            }
+    }
+}
+```
+
+### 为什么这么写
+
+1. **放在 `init` 里**：ViewModel 一创建就开始监听，不需要等 UI 触发。
+2. **用 `viewModelScope.launch`**：让这个监听跟 ViewModel 同寿命。退出页面 → ViewModel 销毁 → `collect` 自动停 → 不会泄漏。这正是地基概念 3 的特性二。
+3. **`conflate()` 是什么**：流式接收时，数据库可能一秒钟变 50 次（每个 SSE chunk 都写一次）。但屏幕一秒只刷新 60 帧，没必要 50 次都处理。`conflate()` 的意思是"如果来不及处理，就只保留最新值，中间的丢掉"——把 50 次/秒压到约 10 次/秒，UI 还是一样顺，但 CPU 省了一大半。
+
+### 不这样写会怎样
+
+- 如果不在协程里 `collect`：Flow 永远不开始，UI 拿不到数据。
+- 如果用 `GlobalScope`：退出页面后还在监听数据库，回调时去更新一个已死的 `_messages`，泄漏或崩溃。
+- 如果不 `conflate()`：流式时一秒重组 50 次，低端机会卡。
+
+**一句话**：这是"我要一直盯着数据库，它变我就更新 UI"的写法。需要持续监听就放 `init` + `launch`。
+
+> 补充一个对比：项目里 `SettingsViewModel.kt:26` 的 `stateIn(viewModelScope, ...)` 是处理 Flow 的另一种姿势——不用手写 `launch + collect`，用一个操作符把冷流"加热"成 `StateFlow`，UI 直接订阅。**什么时候用哪个**：纯数据转换用 `stateIn`；收到数据还要执行额外动作（比如写另一个变量）用 `launch + collect`。这个项目两种都用，分得很清。
+
+---
+
+## 模式 C：持有 Job 的可取消流（"能随时叫停的长任务"）
+
+### 解决什么问题
+
+SSE 流式对话是个**特别长**的任务——可能跑几十秒。这期间用户可能：
+- 想点"停止生成"
+- 想重新生成
+- 切换到另一个会话
+
+这些情况下你都得**把正在跑的流式任务杀掉**。但模式 A、B 都没保存协程的引用，杀不掉。怎么办？
+
+### 代码
+
+```kotlin
+// ChatViewModel.kt:108, 179
+private var streamingJob: Job? = null          // ← 先准备一个"手柄"变量
+
+streamingJob = viewModelScope.launch {         // ← 把 Job 存起来！
+    repository.sendStreamMessage(conversationId, question)
+        .catch { e -> handleStreamException(e) }
+        .collect { event -> handleSseEvent(event) }
+}
+```
+
+注意和模式 B 的唯一区别：**多了 `streamingJob =`**。
+
+### 为什么这么写
+
+1. **`launch` 会返回一个 `Job` 对象**，它是这个协程的"手柄"。拿到手柄，你就能 `.cancel()` 它。
+2. **存进成员变量 `streamingJob`**：这样其他方法（比如"停止"按钮的处理函数）就能通过 `streamingJob?.cancel()` 随时叫停。
+3. **这是全项目唯一持有 Job 的模式**：因为只有流式任务需要"中途取消"。删除、改设置那些根本不需要取消——写完就完了。
+
+### 不这样写会怎样
+
+- 如果不存 Job（像模式 B 那样）：用户点"停止"时你**没法取消**它，流会一直跑到后端发完为止，浪费电量和流量，还可能去更新已切走的页面。
+- 如果用户连发两条消息：旧流还在跑，新流又开，两个流同时往同一个消息里写内容，数据全乱。所以每次开新流前应该先 `streamingJob?.cancel()` 停旧的——没有 Job 引用就做不到。
+
+**一句话**：长任务要能取消，就得把 `launch` 返回的 Job 存起来。这是"可中断长任务"的写法。
+
+---
+
+## 模式 D：外层编排 launch 包内层（"先准备，再开流"）
+
+### 解决什么问题
+
+发一条消息，要做两件有**严格顺序**的事：
+1. **先**把用户消息存进数据库（不然外键约束失败，回忆上一轮讲的 FK）
+2. **再**开 SSE 流接收回复
+
+而且第 2 步（开流）又是个需要取消的长任务（模式 C）。怎么把"顺序准备"和"可取消长流"组合起来？
+
+### 代码
+
+```kotlin
+// ChatViewModel.kt:156-182
+viewModelScope.launch {                          // ← 外层：做准备工作
+    repository.upsertConversation(...)            //   suspend：等建会话写完
+    repository.saveUserMessage(conversationId, question)  //   suspend：等存消息写完
+    _streamState.value = StreamState.Streaming    //   更新状态
+    // ... 重置各种累积器
+    streamingJob = viewModelScope.launch { ... }  // ← 内层：开 SSE 流
+}
+```
+
+### 为什么这么写——重点讲"为什么要两层 launch"
+
+这是最绕的一种，我多花点篇幅。
+
+**外层 launch 是干嘛的**：`upsertConversation` 和 `saveUserMessage` 都是 `suspend` 函数，必须等它们**一个个写完**才能进行下一步（不然消息还没存进去就开流，外键报错）。而 `suspend` 函数只能在协程里调，所以外层得有个 `launch`。
+
+**那为什么不直接把内层流也顺序写在同一个协程里**，像这样？
+```kotlin
+viewModelScope.launch {
+    repository.upsertConversation(...)
+    repository.saveUserMessage(...)
+    repository.sendStreamMessage(...).collect { ... }   // ← 如果这样写
+}
+```
+有两个问题：
+
+1. **拿不到 Job**：`collect` 是个"永远不返回"的调用（流一直跑）。如果顺序写，外层协程会**永远卡在 collect 上**，而且你没法把 `launch` 返回的 Job 存进 `streamingJob`——因为根本没有第二个 `launch`，没有 Job 可存。模式 C 说要能取消，这里就取消了不了。
+
+2. **职责不清**：外层是"准备阶段"（短，几十毫秒就完），内层是"流式阶段"（长，几十秒）。把它们放一个协程里，准备阶段出问题会连累流式阶段，分开了更清晰。
+
+所以正确做法是：外层 `launch` 顺序做完准备 → 启动**另一个** `launch` 跑流式 → 把内层的 Job 存进 `streamingJob` → 外层协程到此结束（它启动内层后就退场了）。
+
+### 不这样写会怎样
+
+- 如果不按顺序、先开流再存消息：外键约束失败，消息存不进去。
+- 如果把两层合并：拿不到 Job，没法取消流式（模式 C 的问题）。
+
+**一句话**：当"准备工作"和"长流"都需要协程、且长流要能取消时，用两层 launch——外层管顺序准备，内层管可取消的流。
+
+---
+
+## 模式 E：网络/IO 任务 + 显式切线程（"自己动手切到后台"）
+
+### 解决什么问题
+
+设置页有个"测试连接"按钮，点一下要真的发个 HTTP 请求去 ping 后端。问题是：这里用的是**原始的 OkHttp 同步调用**，不是 Room/DataStore 的 `suspend` 函数。
+
+回忆地基概念 2 和 3：`viewModelScope.launch` 默认在主线程跑。OkHttp 的 `execute()` 是同步阻塞的——它不会自己切线程。如果直接在 `launch` 里调，**主线程会被卡死**直到请求返回或超时，期间屏幕冻住。
+
+### 代码
+
+```kotlin
+// SettingsViewModel.kt:70-75
+fun testConnection(url: String) {
+    viewModelScope.launch {
+        _connectionState.value = ConnectionState.Testing       // ← 先显示"测试中"
+        _connectionState.value = withContext(Dispatchers.IO) { // ← 关键：切到后台线程
+            ping(url)                                           //   在后台跑网络请求
+        }                                                       // ← 自动切回主线程
+    }
+}
+```
+
+### 为什么这么写
+
+1. **`withContext(Dispatchers.IO) { ... }`**：意思是"**临时切到 IO 后台线程池执行这段代码，执行完再切回主线程**"。`ping()` 在后台跑，不卡主线程；跑完拿到结果，自动回到主线程，于是你可以安全地把结果赋给 `_connectionState.value`（更新 UI 状态必须在主线程）。
+2. **为什么模式 A 不用这个、模式 E 要用**：这是新手最容易困惑的点，我单独拎出来讲——
+
+   > **关键区别：你调的函数"会不会自己切线程"**
+   > - Room 的 `suspend` 函数、DataStore 的 `suspend` 函数：**内部已经切好线程了**，你调它它自己会去后台跑，所以模式 A 不用 `withContext`。
+   > - 你自己写的 OkHttp 同步调用（`execute()`）、或者任何纯 CPU 计算：**不会自动切**，你在主线程调它就卡主线程，所以模式 E 必须 `withContext(Dispatchers.IO)` 手动切。
+
+   一句话判断：**调别人的 `suspend` 函数通常不用管线程；调非 suspend 的阻塞函数，必须自己 `withContext`。**
+
+3. **状态机**：先设成 `Testing`（UI 显示加载圈），请求回来再设成 `Ok` 或 `Failed`。这是"网络任务 + UI 状态反馈"的典型结构。`ChatViewModel` 的 `uploadFile`（`:229`）和 `loadSessionContext`（`:489`）也是这个套路。
+
+### 不这样写会怎样
+
+- 不加 `withContext(IO)` 直接调 `ping()`：主线程被网络请求卡住，5 秒超时期间屏幕完全冻住，弹 ANR。
+- 把整块都丢到后台线程、不切回主线程：在后台线程更新 `_connectionState.value` 可能出问题（StateFlow 更新理论上线程安全，但其他 UI 操作不安全）。
+
+**一句话**：凡是调"不会自己切线程的阻塞操作"，就得 `withContext(Dispatchers.IO)` 手动切，干完自动回主线程。
+
+---
+
+# 第三部分：一个统一的心智模型
+
+把这 5 种模式串起来，其实就是回答两个问题：
+
+**问题 1：这个任务是短暂的，还是长期的？**
+
+- 短暂的写操作 → 模式 A（派出去不管）
+- 长期的监听 → 模式 B（`init` 里 `collect`）
+- 长期且要能取消 → 模式 C（存 Job）
+
+**问题 2：里面调的东西会不会卡主线程？**
+
+- 调 Room/DataStore 的 `suspend` → 不用管，自动切
+- 调自己的阻塞代码（OkHttp 同步、CPU 计算）→ 必须 `withContext(IO)`，即模式 E
+
+而模式 D 是 A/C/E 的组合：顺序准备 + 可取消长流。
+
+记住这两条判断，遇到新代码你就能自己推断"这里为什么这么写"了。
+

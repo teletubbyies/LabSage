@@ -87,6 +87,7 @@ class ChatViewModel(
 
     fun setApprovalMode(enabled: Boolean) {
         // Persist via DataStore; the collector below keeps _approvalMode in sync.
+        // Fire-and-forget
         viewModelScope.launch { settingsRepository.setApprovalMode(enabled) }
     }
 
