@@ -36,15 +36,8 @@ fun MessageBubble(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 5.dp),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
-        verticalAlignment = Alignment.Bottom
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
-        // Avatar on the outside; bubble fills toward the opposite side.
-        if (!isUser) {
-            BrandMark(size = 30.dp)
-            Spacer(Modifier.width(8.dp))
-        }
-
         Column(
             modifier = Modifier.widthIn(max = 300.dp),
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
@@ -55,14 +48,9 @@ fun MessageBubble(
                 Spacer(Modifier.height(5.dp))
             }
 
-            // Bubble — asymmetric tail corner points toward the avatar side.
+            // Bubble — symmetric rounded corners (avatars were removed).
             Surface(
-                shape = RoundedCornerShape(
-                    topStart = 18.dp,
-                    topEnd = 18.dp,
-                    bottomStart = if (isUser) 18.dp else 5.dp,
-                    bottomEnd = if (isUser) 5.dp else 18.dp
-                ),
+                shape = RoundedCornerShape(18.dp),
                 color = if (isUser) ext.userBubble else ext.assistantBubble,
                 shadowElevation = if (isUser) 0.dp else 0.5.dp,
                 tonalElevation = 0.dp
@@ -93,11 +81,6 @@ fun MessageBubble(
                     }
                 }
             }
-        }
-
-        if (isUser) {
-            Spacer(Modifier.width(8.dp))
-            UserAvatar(size = 30.dp)
         }
     }
 }

@@ -584,3 +584,30 @@ fun testConnection(url: String) {
 
 记住这两条判断，遇到新代码你就能自己推断"这里为什么这么写"了。
 
+---
+
+# 第四部分：聊天 UI 功能迭代记录
+
+> 每条记录格式：选型依据 / 实现原理 / 困难（有则写）。
+
+## 功能 1：移除消息气泡双方头像
+
+### 选型依据
+
+用户要求取消用户与助手两侧的头像展示，让对话区更聚焦于文本内容。
+头像移除后，原先「指向头像一侧」的不对称尖角（`bottomStart`/`bottomEnd` 取 5dp 的那一侧）失去了参照物，保留它只会显得像随机缺角，因此把气泡四角统一为对称圆角。
+
+### 实现原理
+
+`MessageBubble` 用一个 `Row` + `horizontalArrangement`（user=`End`，assistant=`Start`）控制气泡的左右对齐，头像作为 `Row` 的兄弟子项放在气泡外侧（assistant 在左、user 在右）。
+
+- 删除两段头像分支（`if (!isUser) { BrandMark(); Spacer() }` 与 `if (isUser) { Spacer(); UserAvatar() }`）后，`Row` 只剩一个 `Column` 子项，`Arrangement.End/Start` 仍负责把气泡推到右/左，左右对齐逻辑不受影响。
+- `BrandMark` / `UserAvatar` 定义在 `chat.components` 包内，与 `MessageBubble` 同包，原本就无需 import，删掉调用即可，不存在悬空 import。
+- `BrandMark` 仍被 `ChatScreen` 的 TopAppBar、会话列表、设置页使用，所以**不删除** `Avatars.kt`，只改 `MessageBubble`。`UserAvatar` 此后无调用方，但保留定义不碍事，避免连带改动。
+- 气泡 `Surface` 的 `shape` 从分段 `RoundedCornerShape(topStart=18, …, bottomStart=if(isUser)18 else 5, …)` 简化为 `RoundedCornerShape(18.dp)`。
+- 顺手去掉 `Row` 上已无意义的 `verticalAlignment = Alignment.Bottom`（那是为了让气泡底部与头像底部对齐）。
+
+### 困难
+
+无。
+
