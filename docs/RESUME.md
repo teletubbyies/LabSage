@@ -1,142 +1,105 @@
-# LabSage — AI 实验室知识助手 Android 客户端
+# Android 客户端开发校招简历（主投版）
 
-> 本文档按 **STAR 法则** 撰写，所有技术细节、行数、文件数、Bug 数均于 **2026-07-06** 与源码逐项核对一致。
->
-> ⚠️ **三处需你按实情确认后再用**：
-> 1. **时间跨度**：git 提交记录为 `2026-07-01 ~ 07-05`（24 次提交）。下文简历版本统一写 `2026.07`，若实际开发周期更长（更早动手 / 中途 rebase），请据实调整。
-> 2. **无单元测试**：`app/src/test`、`app/src/androidTest` 当前为空。涉及测试只说「纯函数、便于补单测」，**不要写「已覆盖单测」**。
-> 3. **`SseParser.kt` 是学习协议时手写的纯函数解析器，未接入运行链路**（生产走 okhttp-sse 内置解析）。若面试官翻到该文件追问，需如实说明，不要宣称「线上用了自研解析器」。
+> 面向 Android 客户端开发校招岗位。方括号内容需要按个人真实信息替换；从“投递前检查”开始的内容不放进最终 PDF。
 
----
+## [姓名]
 
-## 项目概述（一句话）
+**求职意向：Android 客户端开发工程师｜[2027 届/实际毕业年份]**
 
-独立开发的、基于 **Jetpack Compose** 的 AI 知识助手 Android 客户端，对接 Go 后端（GoFrame + Milvus + ReAct Agent）的 **SSE 流式 API**，支持流式对话与中断续传、ReAct 工具调用过程可视化、Markdown 渲染、多会话管理与暗黑模式。
+[手机号] ｜ [邮箱] ｜ [所在城市] ｜ [GitHub/Gitee] ｜ [技术博客，可选]
 
----
+## 教育背景
 
-## STAR 描述
+**[学校名称]** ｜ [本科/硕士] ｜ [专业名称] ｜ [入学年月]—[毕业年月]
 
-### S — Situation（背景）
+- GPA：[按实际填写]；排名：[按实际填写，可选]
+- 核心课程：[数据结构与算法、操作系统、计算机网络、数据库、Java/Kotlin 等，仅保留真实课程]
+- 荣誉奖项：[奖学金/竞赛/优秀学生等；没有则删除本行]
 
-后端团队基于 **GoFrame + Milvus 向量数据库 + ReAct Agent** 构建了面向实验室运维场景的 AI 知识助手，已提供 **RESTful + SSE（Server-Sent Events）流式 API**，但缺少 Android 端客户端。需要从零交付一个功能完整、架构规范的 Android App 作为团队对外演示产品。
+## 专业技能
 
-### T — Task（任务）
+- **Kotlin**：掌握协程、Flow/StateFlow、sealed class、高阶函数、属性委托等特性，能够处理异步任务、状态建模与生命周期协作。
+- **Android**：能够使用 Jetpack Compose、Material 3、ViewModel、Navigation、Room、DataStore 完成原生应用开发；具备通知、运行时权限、语音识别、文件选择等系统能力接入经验。
+- **网络与存储**：使用 OkHttp/okhttp-sse、Retrofit、Gson 对接 SSE 与 REST API，理解 `callbackFlow` 回调桥接、Channel 背压、请求取消、Room 外键与响应式查询。
+- **架构与工程**：具备 MVVM、Repository、手动依赖注入实践；使用 Git、Gradle、JUnit、Android Lint，能够定位并修复并发竞态、依赖兼容和 SQLite 数据一致性问题。
+- **Android 原理**：理解主线程 Looper/MessageQueue、Handler 与 `Dispatchers.Main` 的关系，能够区分挂起与阻塞并合理选择线程调度策略。
 
-1. **从零搭建** Android 项目，独立完成技术选型、架构设计、全部编码与前后端联调
-2. 实现 **SSE 流式对话**（含中断续传）、**ReAct Agent 执行过程实时展示**、**Markdown 渲染**、文件上传、多会话管理等核心功能
-3. 确保流式场景下的 **UI 流畅度与数据可靠性**（消息不丢、杀进程可恢复）
-4. 编写覆盖架构设计、Bug 根因分析与选型决策的技术文档
+## 项目经历
 
-### A — Action（行动）
+### LabSage｜实验室 AI 知识助手 Android 客户端
 
-**架构设计：**
-- 采用 **MVVM + Repository + 手动 DI** 架构，不引入 Hilt/Dagger；依赖图集中在 `LabSageApplication` 中以约 **10 个 `by lazy` 单例**组装，透明可调试
-- 基于 **StateFlow + sealed class** 构建流式对话状态机（`Idle → Streaming → Completed → Error`），状态穷举、配置变更安全
-- 流式层使用 **OkHttp `okhttp-sse` + `callbackFlow`**（**而非 Retrofit CallAdapter**）实现 SSE 解析——Retrofit 对 SSE 长连接无增值，OkHttp 原生 SSE 库更可靠；Retrofit 仅用于 `/api/chat`、`/api/upload`、`/api/session/context` 等短请求
+**独立负责 Android 客户端** ｜ 2026.07—至今 ｜ [项目链接/演示视频]
 
-**SSE 流式核心（技术亮点）：**
-- 通过 **`callbackFlow` + `awaitClose`** 将 OkHttp `EventSourceListener` 回调桥接为 Kotlin `Flow<SseEvent>`，Flow 取消时自动断开 SSE 连接
-- 针对 **trace 事件洪峰**（工具查询产生 200+ 条 trace，溢出 `callbackFlow` 默认 64 容量，`trySend` 静默丢弃 `message`/`done`）设计三级治理：**事件过滤**（仅转发 `[tool]/[react]/[route]` 结构化生命周期行，~200 → ~3 条）→ **`buffer(Channel.UNLIMITED)`** 兜底 → **Room 批量写入**（每 5 chunk 一次，Done 时 finalize）
+面向实验室知识检索与环境查询场景，对接现有 Go AI 后端，独立完成从 SSE/REST 网络层、Room 本地持久化到 Compose UI 的端到端 Android 客户端；支持流式问答、中断续传、工具调用可视化、多会话管理与回答完成通知。
 
-**数据持久化：**
-- 使用 **Room** 存储会话与消息，设计 `conversation` + `message` 双表，通过 `ForeignKey(CASCADE)` 保证引用完整性
-- 流式内容采用 **首 chunk INSERT（占位）+ 后续 UPDATE** 模式，进程被 kill 后可通过 `is_partial` 字段恢复中断消息
-- 定位并修复 **`OnConflictStrategy.REPLACE` 触发 FK CASCADE 级联删除全部消息** 的严重 Bug：SQLite 的 REPLACE 算法等价于 DELETE + INSERT（非 MySQL 的 `ON DUPLICATE KEY UPDATE`），DELETE 触发 `ON DELETE CASCADE`。修复为拆分显式 `@Query("UPDATE")` + `@Insert(IGNORE)`
+- 采用 **MVVM + Repository + 手动 DI** 组织代码，以 `StateFlow` 和 sealed class 建模 `Idle/Streaming/Completed/Error` 流式状态，使网络事件、持久化数据与 Compose UI 保持单向数据流。
+- 基于 **OkHttp okhttp-sse + callbackFlow + awaitClose** 将 `EventSourceListener` 回调桥接为冷 Flow，协程取消时主动断开长连接；针对工具查询产生的 200+ trace/message 事件，先按结构化前缀过滤噪音，再以 `buffer(Channel.UNLIMITED)` 兜底，解决默认 Channel 容量下 `trySend` 丢失 message/done 的问题。
+- 使用 **Room** 设计会话/消息双表及外键级联，采用“助手消息占位 INSERT + 流式 UPDATE + 完成时 finalize”持久化增量内容，并通过 `is_partial` 支持中断后的 Continue/Regenerate；定位 SQLite `REPLACE = DELETE + INSERT` 误触发 FK CASCADE 的数据丢失问题，改为 `UPDATE + INSERT(IGNORE)`。
+- 使用 **Jetpack Compose + Material 3** 构建自适应聊天界面，实现 Markdown 渲染、浅/深色主题、ReAct 工具调用时间线、长回答自适应宽度，以及“底部锚点 + 用户滚动意图”策略，避免流式更新在用户回看历史时强制抢滚动。
+- 完成 Android 系统能力闭环：通过 **NotificationChannel + NotificationCompat + PendingIntent** 支持回答完成通知，携带 `conversationId + messageId` 覆盖冷启动 `onCreate` 与热启动 `onNewIntent`，进入会话后等待 Room Flow 数据并精确定位目标消息；同时接入 `SpeechRecognizer`、运行时权限和 Content URI 文件上传。
+- 将后端 string-encoded Facts JSON 解析为稳定的 **K–V UI 模型**，兼容包装对象、直接对象与嵌套 JSON，支持单项确认删除并通过现有 PUT 接口回写；为 JSON 解析/删除及通知摘要编写 **8 个 JUnit 测试**，完成 Gradle 单测、Debug APK 构建与 Android Lint 检查。
 
-**UI 与交互：**
-- 基于 **Jetpack Compose Material 3** 实现声明式 UI，`LazyColumn` 渲染消息列表
-- **ReAct 工具调用过程可视化**：解析 SSE trace 事件（`[tool] 开始调用 #N name args=…` / `调用完成 name result=…`），实时构建工具调用时间线（FIFO 配对完成态、统计单次耗时），在执行面板呈现 Agent 推理链路；流式空消息期间渲染 **"Thinking" 动画**区分「工具执行中」与「卡死」
-- 实现 **Markdown 渲染**（`jeziellago/compose-markdown`，支持代码块/表格/链接）、**暗黑模式**（`isSystemInDarkTheme()` + 自定义 ExtendedColors CompositionLocal）、**网络状态监控**（`ConnectivityManager.NetworkCallback` 断网横幅）、长按消息 **复制/分享/重新编辑**
-- 集成 `ActivityResultContracts.GetContent` 文件选取，处理 Content URI → 临时文件拷贝 → multipart 上传至知识库
+**技术栈：** Kotlin、Jetpack Compose、Material 3、Coroutines、Flow/StateFlow、OkHttp SSE、Retrofit、Room、DataStore、Navigation Compose、JUnit
 
-**性能优化：**
-- 四层链路优化：Room Flow **`.conflate()`** 丢弃中间态 → 拆分滚动策略（新消息 `animateScrollToItem`、内容更新 `scrollToItem`）→ **`@Immutable`** + **`derivedStateOf`** 缩小重组范围 → `flowOn(Dispatchers.IO)` 保持主线程不阻塞
+## 个人总结
 
-**工程质量：**
-- 全程 Git 版本控制，**17 个联调问题**（含 P0 崩溃级、并发竞态、依赖兼容等）全部记录根因分析与选型决策（见 `BUGFIX_LOG.md`）
-- 编写架构设计、核心知识点、联调记录等多份技术文档，可直接作为面试作品集
-- 对接后端 `GET/PUT /api/session/context` 接口支持会话摘要的查看与编辑
-
-### R — Result（成果）
-
-- 独立交付 **33 个源文件 / 约 4142 行 Kotlin** 代码，构建通过、APK 在模拟器端到端跑通
-- 修复 `trySend` 缓冲区溢出 Bug 后，流式 `message`/`done` 事件不再丢失
-- 流式场景 UI 重组频率从 ~50/s 降至 ~10/s，`LazyColumn` 滚动无抖动
-- 杀进程重启后历史消息与中断消息**完整恢复**
+- 能够独立完成 Android 功能从需求拆解、数据契约、架构设计到实机回归的完整闭环，重视异常路径、生命周期与数据安全。
+- 不止停留在 API 使用层，能够从协程调度、Flow 背压、Compose 重组、Looper/MessageQueue 和 SQLite 冲突策略解释代码设计与 Bug 根因。
+- 持续记录技术选型和问题复盘，能够围绕真实项目清晰说明“遇到了什么问题、为什么发生、如何验证和取舍”。
 
 ---
 
-## 简历建议版本
+# 项目经历压缩版（简历空间不足时替换）
 
-> 以下版本**逐句与源码核对**，每条 bullet 的代码出处见本节末尾表格。
+### LabSage｜实验室 AI 知识助手 Android 客户端
 
-### 主推版（贴合代码，项目经历 5–6 条时推荐）
+**独立负责 Android 客户端** ｜ 2026.07—至今
 
-> **LabSage — 实验室 AI 知识助手 Android 客户端** ｜ 独立开发 ｜ 2026.07
->
-> 为实验室自研 AI 知识助手后端（Go + Milvus + ReAct Agent + SSE 流式）独立开发的 Android 原生客户端，采用 **MVVM + Repository + 手动 DI** 架构，完成从网络层、本地持久化到 Compose UI 的完整链路。
->
-> - 基于 **OkHttp + okhttp-sse** 实现 SSE 流式接收，通过 `callbackFlow` + `awaitClose` 将 `EventSourceListener` 回调桥接为 Kotlin `Flow<SseEvent>`，Flow 取消时自动断开连接；针对工具类查询产生的 200+ trace 事件洪峰，采用「事件过滤 + `buffer(Channel.UNLIMITED)` 兜底」策略避免 Channel 默认容量溢出导致丢事件
-> - 采用 **MVVM + StateFlow** 架构，将流式状态建模为 sealed class（`Idle → Streaming → Completed → Error`），View 层仅观察单一状态源；借助后端 `Continue + PartialAnswer` 机制实现**中断续传**——部分内容落库后可一键 Continue 接续生成或 Regenerate 重发
-> - 使用 **Jetpack Compose** 构建对话界面，针对流式场景设计双策略滚动（新消息 `animateScrollToItem`、流式 chunk 更新用 `scrollToItem`，避免逐 chunk 动画卡顿）；配合 Room Flow `.conflate()` + `@Immutable` + `derivedStateOf` 缩小重组范围，将高频更新下的重组频率从约 50/s 降至约 10/s
-> - 解析 SSE **trace** 事件（`[tool] 开始调用 #N name args=…` / `调用完成 name result=…`），实时构建工具调用时间线，按 FIFO 匹配完成态并统计单次调用耗时，在执行面板内联呈现 **ReAct Agent** 推理链路
-> - 基于 **Room** 设计 `conversation` + `message` 双表（`ForeignKey` + `CASCADE` 保证引用完整性），流式内容采用「首 chunk INSERT 占位 + 后续 UPDATE」模式，配合 `is_partial` 字段实现进程中断后的消息恢复；定位并修复 `OnConflictStrategy.REPLACE` 在 SQLite 下等价于 DELETE+INSERT、从而误触发 FK 级联删除的陷阱（改用 UPDATE）
-> - 通过 **Retrofit** 封装非流式接口（`/api/chat`、`/api/upload` multipart、`/api/session/context`），集成 `ActivityResultContracts.GetContent` 文件选择器处理 Content URI → 临时文件拷贝与上传后清理；为 SSE 单独配置无读超时、仅 header 级别日志的 OkHttpClient，避免 BODY 日志缓冲整段响应体导致事件不回调
->
-> **技术栈**：`Kotlin` `Jetpack Compose` `OkHttp / okhttp-sse` `Retrofit` `Room` `StateFlow` `Coroutines` `MVVM`
+- 基于 **MVVM + StateFlow + sealed class** 搭建 Compose 客户端；使用 **OkHttp SSE + callbackFlow/awaitClose** 接入流式问答，以事件过滤和 Channel 缓冲解决 200+ 事件下的消息丢失问题。
+- 使用 **Room** 双表与增量 UPDATE 持久化流式内容，支持中断续传；定位并修复 SQLite `REPLACE` 触发 FK CASCADE、导致历史消息被级联删除的问题。
+- 实现 Markdown 对话、ReAct 工具时间线、自适应长回答和用户意图感知滚动；通过通知 `PendingIntent` 覆盖冷/热启动并按 `messageId` 精确定位回答。
+- 将后端 Facts JSON 转换为可管理的 K–V UI，完成单项删除回写；编写 **8 个 JUnit 测试**并通过 Debug 构建与 Android Lint。
 
-### 紧凑版（项目经历 7+ 条、空间紧张时）
-
-> **LabSage — 实验室 AI 知识助手 Android 客户端** ｜ 独立开发 ｜ 2026.07
->
-> 为实验室自研 AI 知识助手后端独立开发的 Android 原生客户端（Jetpack Compose + OkHttp + Room）。
->
-> - 基于 **OkHttp okhttp-sse + callbackFlow** 实现 SSE 流式接收并桥接为 Kotlin `Flow`；针对工具查询的 200+ trace 事件洪峰，用「事件过滤 + `buffer(UNLIMITED)`」避免 Channel 溢出丢事件
-> - **MVVM + StateFlow + sealed class**（`Idle→Streaming→Completed→Error`）状态机；借后端 `Continue + PartialAnswer` 实现流中断续传
-> - **Room** 双表（FK CASCADE）+ 流式「首 chunk INSERT + 后续 UPDATE」+ `is_partial` 字段实现杀进程可恢复；修复 `OnConflictStrategy.REPLACE` 误触发 FK 级联删除
-> - **Compose** 双策略滚动 + `.conflate()`/`@Immutable`/`derivedStateOf` 把重组频率从 ~50/s 降到 ~10/s；解析 SSE trace 实时可视化 ReAct 工具调用链路
-
-### 一行版（技能总结 / 个人简介）
-
-> 独立开发 AI 知识助手 Android 客户端（Kotlin + Jetpack Compose + OkHttp SSE + Room + MVVM），完成从 SSE 流式接收到 Compose UI 的完整链路，支持中断续传、ReAct 工具调用可视化、多会话管理与暗黑模式。
-
-### bullet 代码出处（面试自证）
-
-| Bullet | 关键证据 |
-|---|---|
-| SSE + callbackFlow + buffer | `data/remote/OkHttpSseDataSource.kt:38,62-98` |
-| sealed class 状态机 + Continue 续传 | `domain/model/StreamState.kt:12`、`data/repository/ChatRepository.kt:74`、`ui/chat/ChatViewModel.kt:189` |
-| 双策略滚动 + conflate / Immutable | `ui/chat/ChatScreen.kt:95-101`、`ui/chat/ChatViewModel.kt:125` |
-| trace 解析 + 工具调用时间线 | `ui/chat/ChatViewModel.kt:398-467` |
-| Room 双表 + REPLACE→UPDATE 修复 | `data/local/AppDatabase.kt:19`、`data/repository/ChatRepository.kt:185-198` |
-| Retrofit 非流式接口 + 双 OkHttp Client | `data/remote/LabSageApi.kt:13-31`、`LabSageApplication.kt:88-141` |
+**技术栈：** Kotlin、Compose、Coroutines/Flow、OkHttp/Retrofit、Room、DataStore、Navigation
 
 ---
 
-## 面试常见追问（建议提前准备）
+# 30 秒自我介绍
 
-| 面试官可能的追问 | 回答要点 |
-|---|---|
-| "为什么不用 Hilt？" | 依赖图简单（`LabSageApplication` 约 10 个 `by lazy` 单例、~210 行），手动 DI 比注解处理器更透明，无 KSP/KAPT 编译开销 |
-| "SSE 和 WebSocket 有什么区别？" | SSE 单向（服务端→客户端）、基于 HTTP、自动重连；WebSocket 全双工。聊天场景只需服务端推送，SSE 更轻量 |
-| "callbackFlow 的背压策略？" | `trySend` vs `send`、Channel 容量（BUFFERED/CONFLATED/UNLIMITED）；本项目遇 `trySend` 在默认 64 容量下静默丢事件，最终用「过滤 + `buffer(UNLIMITED)` + Room 批量写」三级治理 |
-| "为什么 REPLACE 会触发 CASCADE？" | SQLite REPLACE 算法 = DELETE + INSERT，DELETE 触发 FK `ON DELETE CASCADE`，不同于 MySQL 的 `ON DUPLICATE KEY UPDATE`；修复改用显式 `@Query("UPDATE")` |
-| "Compose 重组优化的手段？" | `.conflate()` 消费端限流、`@Immutable` 跳过无关重组、`derivedStateOf` 派生状态、拆分滚动策略（新消息 animate / 内容更新 snap） |
-| "怎么确保杀进程后消息不丢？" | 流式首 chunk INSERT 占位 + 每 5 chunk UPDATE + Done 时 `finalizeMessage`，`is_partial` 字段标记中断状态 |
-| "Retrofit 为什么不处理 SSE？" | Retrofit 对 SSE 长连接无增值（无声明式收益），OkHttp `okhttp-sse` 原生 `EventSource` 更可靠；Retrofit 只负责短请求（chat / upload / session） |
+> 面试官您好，我是 [姓名]，[学校][专业]的 [毕业年份] 届学生，应聘 Android 客户端开发。我的核心项目是 LabSage，一个使用 Kotlin 和 Jetpack Compose 独立开发的 AI 知识助手客户端。我完成了 OkHttp SSE 到 Flow 的流式链路、Room 消息持久化、Compose 对话 UI、通知精确跳转等功能，也实际解决过 Channel 背压丢事件和 SQLite REPLACE 触发级联删除的问题。相比只会调用 API，我更关注线程、生命周期和数据流为什么这样设计，希望能在 Android 客户端岗位继续深入工程实践。
 
 ---
 
-## 技术栈速览
+# 投递前检查（最终 PDF 删除本节）
 
-| 类别 | 技术 | 选择理由 |
-|------|------|---------|
-| 语言 | **Kotlin 2.2.10** | Android 官方首选 |
-| UI | **Jetpack Compose + Material 3**（BOM 2025.06.01） | 声明式 UI，流式场景高性能重组 |
-| 架构 | **MVVM + 手动 DI**（无 Hilt） | 无注解处理器编译开销，依赖透明 |
-| 网络 | **OkHttp okhttp-sse + Retrofit** | SSE 长连接与短请求分离 |
-| 存储 | **Room** + **DataStore 1.1.7** | Room 负责会话/消息（FK 级联 + Flow），DataStore 负责设置 |
-| 状态 | **StateFlow + sealed class** | 类型安全状态机，配置变更安全 |
-| Markdown | **jeziellago/compose-markdown 0.5.7** | 纯 Compose、兼容当前 BOM（mikepenz 系均因 `getCurrentCompositeKeyHashCode` 缺失而不兼容） |
-| 构建 | **Gradle 9.4.1 + AGP 9.2.1** | — |
+## 必须补齐
+
+- 姓名、手机号、邮箱、城市、毕业年份。
+- 学校、专业、学历、时间；GPA/排名不占优时可以不写。
+- 项目仓库或 1—2 分钟演示视频链接。若仓库包含后端或隐私配置，先清理后公开。
+- 若有实习、竞赛、奖项，应放在项目经历之前；没有则不要虚构。
+
+## 排版建议
+
+- 控制在 **一页 A4**；正文建议 10.5—11 pt，页边距 1.5—1.8 cm。
+- 项目保留 5—6 条 bullet，每条最好不超过两行；使用黑色正文和单一强调色。
+- 文件名使用 `姓名-学校-Android客户端开发-毕业年份.pdf`，不要使用“最终版2”“最新版”等名称。
+- 技术名词加粗即可，不添加技能进度条、星级评分、头像或大面积图标。
+
+## 真实性边界
+
+- Android 客户端可以写“独立负责”；Go + Milvus + Agent 是对接的后端技术，不写成自己独立开发，除非确实参与且能展示对应代码。
+- 项目使用的是**手动 DI**，不要写 Hilt/Dagger。
+- 生产 SSE 协议解析由 `okhttp-sse` 完成；`SseParser.kt` 是学习/备选实现，不写“自研 SSE 解析器用于生产”。
+- 不写未经 Macrobenchmark、Profiler 或埋点验证的 FPS、耗时、重组下降比例；用已复现的事件数量、测试数量和具体 Bug 代替。
+- Facts 删除当前是客户端 read-modify-write 后整体 PUT；若被追问并发一致性，应说明多端场景更适合后端提供按 key 的原子 PATCH/DELETE 与 version/ETag。
+
+## 技术面重点准备
+
+1. `callbackFlow` 为什么适配回调 API，`awaitClose` 如何保证取消清理。
+2. `trySend` 为什么会失败，BUFFERED/CONFLATED/UNLIMITED 的取舍。
+3. Room Flow 如何通过表失效通知驱动 UI，为什么流式写入要节流。
+4. SQLite `OnConflictStrategy.REPLACE` 为什么会触发外键级联。
+5. Compose 如何登记 State 读取依赖，底部锚点和用户滚动意图如何避免抢滚动。
+6. 通知点击如何覆盖冷启动/热启动，为什么要同时处理 `onCreate` 和 `onNewIntent`。
+7. `Dispatchers.Main`、Handler、Looper/MessageQueue 之间的关系。

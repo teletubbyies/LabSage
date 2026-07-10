@@ -16,7 +16,6 @@ import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Verified
@@ -26,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.labsage.app.LabSageApplication
+import com.labsage.app.R
 import com.labsage.app.domain.model.AppSettings
 import com.labsage.app.domain.model.QuickAction
 import com.labsage.app.domain.model.ThemeMode
@@ -52,10 +53,10 @@ fun SettingsScreen(onBack: () -> Unit) {
         containerColor = scheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("设置", fontWeight = FontWeight.SemiBold, color = scheme.onSurface) },
+                title = { Text(stringResource(R.string.settings), fontWeight = FontWeight.SemiBold, color = scheme.onSurface) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = scheme.onSurface)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back), tint = scheme.onSurface)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = scheme.surface)
@@ -68,7 +69,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // Brand header
             Surface(
@@ -79,20 +80,20 @@ fun SettingsScreen(onBack: () -> Unit) {
                 shadowElevation = 0.5.dp
             ) {
                 Row(
-                    Modifier.padding(18.dp),
+                    Modifier.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     BrandMark(size = 48.dp)
                     Spacer(Modifier.width(14.dp))
                     Column {
                         Text(
-                            "LabSage",
+                            stringResource(R.string.app_name),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = scheme.onSurface
                         )
                         Text(
-                            "实验室智能助手 · v1.0",
+                            "${stringResource(R.string.app_subtitle)} · v1.0",
                             style = MaterialTheme.typography.bodySmall,
                             color = scheme.onSurfaceVariant
                         )
@@ -102,8 +103,8 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             // ---------- Backend address ----------
             SectionCard(
-                title = "后端地址",
-                subtitle = "修改后新请求即时生效，无需重启",
+                title = stringResource(R.string.backend_address),
+                subtitle = stringResource(R.string.backend_address_subtitle),
                 icon = Icons.Default.DesktopWindows
             ) {
                 var url by remember(settings.baseUrl) { mutableStateOf(settings.baseUrl) }
@@ -112,7 +113,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     onValueChange = { url = it },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    label = { Text("Base URL") },
+                    label = { Text(stringResource(R.string.base_url_label)) },
                     placeholder = { Text(AppSettings.DEFAULT_BASE_URL) },
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = KeyboardType.Uri,
@@ -131,13 +132,13 @@ fun SettingsScreen(onBack: () -> Unit) {
                         enabled = url.trim() != settings.baseUrl && url.isNotBlank(),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = scheme.primary)
-                    ) { Text("保存") }
+                    ) { Text(stringResource(R.string.action_save)) }
                     Spacer(Modifier.width(10.dp))
                     OutlinedButton(
                         onClick = { viewModel.testConnection(url) },
                         enabled = url.isNotBlank(),
                         shape = RoundedCornerShape(12.dp)
-                    ) { Text("测试连接") }
+                    ) { Text(stringResource(R.string.test_connection)) }
                 }
                 Spacer(Modifier.height(6.dp))
                 ConnectionStatus(connectionState)
@@ -145,8 +146,8 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             // ---------- Appearance ----------
             SectionCard(
-                title = "外观",
-                subtitle = "可跟随系统暗黑模式，也可手动指定",
+                title = stringResource(R.string.appearance),
+                subtitle = stringResource(R.string.appearance_subtitle),
                 icon = Icons.Default.Palette
             ) {
                 ThemePicker(settings.themeMode, viewModel::setThemeMode)
@@ -154,27 +155,30 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             // ---------- Model ----------
             SectionCard(
-                title = "模型",
-                subtitle = "实验性 · 需后端配合读取生效",
+                title = stringResource(R.string.model),
+                subtitle = stringResource(R.string.model_subtitle),
                 icon = Icons.Default.Tune
             ) {
                 var expanded by remember { mutableStateOf(false) }
                 var model by remember(settings.model) { mutableStateOf(settings.model) }
-                Box {
+                ExposedDropdownMenuBox(
+                    expanded = expanded,
+                    onExpandedChange = { expanded = !expanded }
+                ) {
                     OutlinedTextField(
                         value = model,
                         onValueChange = {},
                         readOnly = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("首选模型") },
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true)
+                            .fillMaxWidth(),
+                        label = { Text(stringResource(R.string.preferred_model)) },
                         trailingIcon = {
-                            IconButton(onClick = { expanded = true }) {
-                                Icon(Icons.Filled.PlayCircle, "选择", tint = scheme.onSurfaceVariant)
-                            }
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
                         },
                         shape = RoundedCornerShape(14.dp)
                     )
-                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                         AppSettings.MODEL_OPTIONS.forEach { option ->
                             DropdownMenuItem(
                                 text = { Text(option) },
@@ -194,27 +198,27 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             // ---------- Approval mode ----------
             SectionCard(
-                title = "工具审批模式",
-                subtitle = "开启后，发送消息前需确认（防误触发工具调用）",
+                title = stringResource(R.string.approval_mode),
+                subtitle = stringResource(R.string.approval_mode_subtitle),
                 icon = Icons.Default.Verified
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Verified, null, Modifier.size(20.dp), tint = scheme.primary)
                     Spacer(Modifier.width(10.dp))
-                    Text("发送前确认", modifier = Modifier.weight(1f))
+                    Text(stringResource(R.string.confirm_before_sending), modifier = Modifier.weight(1f))
                     Switch(checked = settings.approvalMode, onCheckedChange = viewModel::setApprovalMode)
                 }
             }
 
             // ---------- Default quick actions ----------
             SectionCard(
-                title = "默认快捷操作",
-                subtitle = "输入栏显示的快捷按钮",
+                title = stringResource(R.string.default_quick_actions),
+                subtitle = stringResource(R.string.default_quick_actions_subtitle),
                 icon = Icons.Default.Bolt
             ) {
-                QuickActionToggle("GPU 状态", Icons.Filled.Memory, QuickAction.GPU, settings.quickActions, viewModel::toggleQuickAction)
+                QuickActionToggle(stringResource(R.string.gpu_status), Icons.Filled.Memory, QuickAction.GPU, settings.quickActions, viewModel::toggleQuickAction)
                 Spacer(Modifier.height(6.dp))
-                QuickActionToggle("Conda 环境", Icons.Filled.Terminal, QuickAction.CONDA, settings.quickActions, viewModel::toggleQuickAction)
+                QuickActionToggle(stringResource(R.string.conda_environment), Icons.Filled.Terminal, QuickAction.CONDA, settings.quickActions, viewModel::toggleQuickAction)
             }
 
             Spacer(Modifier.height(12.dp))
@@ -237,7 +241,7 @@ private fun SectionCard(
         tonalElevation = 0.dp,
         shadowElevation = 0.5.dp
     ) {
-        Column(Modifier.padding(18.dp)) {
+        Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     Modifier
@@ -256,7 +260,7 @@ private fun SectionCard(
                     }
                 }
             }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(14.dp))
             content()
         }
     }
@@ -270,17 +274,17 @@ private fun ConnectionStatus(state: SettingsViewModel.ConnectionState) {
         SettingsViewModel.ConnectionState.Testing -> Row(verticalAlignment = Alignment.CenterVertically) {
             CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = scheme.primary)
             Spacer(Modifier.width(8.dp))
-            Text("正在测试…", style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+            Text(stringResource(R.string.connection_testing), style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
         }
         is SettingsViewModel.ConnectionState.Ok -> Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.CheckCircle, null, Modifier.size(16.dp), tint = scheme.primary)
             Spacer(Modifier.width(6.dp))
-            Text("连接成功 · ${state.latencyMs} ms", style = MaterialTheme.typography.bodySmall, color = scheme.primary, fontWeight = FontWeight.Medium)
+            Text(stringResource(R.string.connection_success, state.latencyMs), style = MaterialTheme.typography.bodySmall, color = scheme.primary, fontWeight = FontWeight.Medium)
         }
         is SettingsViewModel.ConnectionState.Failed -> Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.CloudOff, null, Modifier.size(16.dp), tint = scheme.error)
             Spacer(Modifier.width(6.dp))
-            Text("连接失败 · ${state.message}", style = MaterialTheme.typography.bodySmall, color = scheme.error, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(stringResource(R.string.connection_failed, state.message), style = MaterialTheme.typography.bodySmall, color = scheme.error, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -290,9 +294,9 @@ private fun ThemePicker(current: ThemeMode, onSelect: (ThemeMode) -> Unit) {
     val scheme = MaterialTheme.colorScheme
     data class Option(val mode: ThemeMode, val icon: ImageVector, val label: String)
     val options = listOf(
-        Option(ThemeMode.SYSTEM, Icons.Filled.DesktopWindows, "跟随系统"),
-        Option(ThemeMode.LIGHT, Icons.Filled.LightMode, "浅色"),
-        Option(ThemeMode.DARK, Icons.Filled.DarkMode, "深色")
+        Option(ThemeMode.SYSTEM, Icons.Filled.DesktopWindows, stringResource(R.string.theme_system)),
+        Option(ThemeMode.LIGHT, Icons.Filled.LightMode, stringResource(R.string.theme_light)),
+        Option(ThemeMode.DARK, Icons.Filled.DarkMode, stringResource(R.string.theme_dark))
     )
 
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {

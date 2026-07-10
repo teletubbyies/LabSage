@@ -16,6 +16,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -23,8 +25,10 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.labsage.app.LabSageApplication
+import com.labsage.app.R
 import com.labsage.app.data.local.entity.ConversationEntity
 import com.labsage.app.ui.chat.components.BrandMark
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -35,7 +39,8 @@ fun ConversationListScreen(
     onNewConversation: (String) -> Unit,
     onOpenSettings: () -> Unit = {}
 ) {
-    val app = androidx.compose.ui.platform.LocalContext.current.applicationContext as LabSageApplication
+    val context = LocalContext.current
+    val app = context.applicationContext as LabSageApplication
     val viewModel: ConversationListViewModel = viewModel(factory = app.conversationListViewModelFactory)
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
@@ -50,9 +55,13 @@ fun ConversationListScreen(
 
     // Rename dialog target.
     var renaming by remember { mutableStateOf<ConversationEntity?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+    val unnamedConversation = stringResource(R.string.empty_conversation_title)
 
     Scaffold(
         containerColor = scheme.background,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -61,13 +70,13 @@ fun ConversationListScreen(
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text(
-                                "LabSage",
+                                stringResource(R.string.app_name),
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = scheme.onBackground
                             )
                             Text(
-                                "实验室智能助手",
+                                stringResource(R.string.app_subtitle),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = scheme.onSurfaceVariant
                             )
@@ -76,7 +85,7 @@ fun ConversationListScreen(
                 },
                 actions = {
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, "设置", tint = scheme.onSurfaceVariant)
+                        Icon(Icons.Default.Settings, stringResource(R.string.settings), tint = scheme.onSurfaceVariant)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = scheme.surface)
@@ -88,8 +97,8 @@ fun ConversationListScreen(
                 containerColor = scheme.primary,
                 contentColor = scheme.onPrimary,
                 shape = RoundedCornerShape(18.dp),
-                icon = { Icon(Icons.Default.Edit, "新会话") },
-                text = { Text("新会话", fontWeight = FontWeight.SemiBold) }
+                icon = { Icon(Icons.Default.Edit, stringResource(R.string.new_conversation)) },
+                text = { Text(stringResource(R.string.new_conversation), fontWeight = FontWeight.SemiBold) }
             )
         }
     ) { padding ->
@@ -101,12 +110,12 @@ fun ConversationListScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 10.dp),
-                placeholder = { Text("搜索会话标题", color = scheme.onSurfaceVariant) },
+                placeholder = { Text(stringResource(R.string.search_conversations), color = scheme.onSurfaceVariant) },
                 leadingIcon = { Icon(Icons.Default.Search, null, tint = scheme.onSurfaceVariant) },
                 trailingIcon = {
                     AnimatedVisibility(visible = isSearching, enter = fadeIn(), exit = fadeOut()) {
                         IconButton(onClick = { viewModel.setSearchQuery("") }) {
-                            Icon(Icons.Default.Close, "清除", tint = scheme.onSurfaceVariant)
+                            Icon(Icons.Default.Close, stringResource(R.string.clear_search), tint = scheme.onSurfaceVariant)
                         }
                     }
                 },
@@ -128,7 +137,7 @@ fun ConversationListScreen(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(Icons.Default.SearchOff, null, tint = scheme.onSurfaceVariant, modifier = Modifier.size(40.dp))
                             Spacer(Modifier.height(10.dp))
-                            Text("未找到匹配的会话", color = scheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                            Text(stringResource(R.string.no_search_results), color = scheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
@@ -137,16 +146,31 @@ fun ConversationListScreen(
                     contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 88.dp)
                 ) {
                     groups.forEach { group ->
-                        if (group.title.isNotEmpty()) {
-                            item(key = "header_${group.title}") { GroupHeader(group.title) }
+                        if (group.titleRes != null) {
+                            item(key = "header_${group.titleRes}") { GroupHeader(group.titleRes) }
                         }
-                        items(group.items, key = { "${group.title}_${it.id}" }) { conv ->
+                        items(group.items, key = { "${group.titleRes}_${it.id}" }) { conv ->
                             ConversationItem(
                                 conv,
                                 onClick = { onConversationClick(conv.id) },
                                 onTogglePin = { viewModel.togglePin(conv) },
                                 onRename = { renaming = conv },
-                                onDelete = { viewModel.deleteConversation(conv.id) }
+                                onDelete = {
+                                    val displayTitle = conv.title.ifBlank { unnamedConversation }
+                                    viewModel.stageDeleteConversation(conv.id)
+                                    coroutineScope.launch {
+                                        val result = snackbarHostState.showSnackbar(
+                                            message = context.getString(R.string.conversation_deleted, displayTitle),
+                                            actionLabel = context.getString(R.string.action_undo),
+                                            duration = SnackbarDuration.Long
+                                        )
+                                        if (result == SnackbarResult.ActionPerformed) {
+                                            viewModel.undoDeleteConversation(conv.id)
+                                        } else {
+                                            viewModel.commitDeleteConversation(conv.id)
+                                        }
+                                    }
+                                }
                             )
                         }
                     }
@@ -157,18 +181,18 @@ fun ConversationListScreen(
 
     // Rename dialog.
     renaming?.let { conv ->
-        var text by remember(conv.id) { mutableStateOf(conv.title) }
+        var text by remember(conv.id) { mutableStateOf(conv.title.ifBlank { unnamedConversation }) }
         AlertDialog(
             onDismissRequest = { renaming = null },
             icon = { Icon(Icons.Default.Edit, null, tint = scheme.primary) },
-            title = { Text("重命名会话", fontWeight = FontWeight.SemiBold) },
+            title = { Text(stringResource(R.string.rename_conversation), fontWeight = FontWeight.SemiBold) },
             text = {
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    label = { Text("标题") },
+                    label = { Text(stringResource(R.string.conversation_title)) },
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = scheme.primary,
@@ -185,9 +209,9 @@ fun ConversationListScreen(
                     enabled = text.isNotBlank(),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = scheme.primary)
-                ) { Text("保存") }
+                ) { Text(stringResource(R.string.action_save)) }
             },
-            dismissButton = { TextButton(onClick = { renaming = null }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { renaming = null }) { Text(stringResource(R.string.action_cancel)) } }
         )
     }
 }
@@ -200,14 +224,14 @@ private fun EmptyState(onStart: () -> Unit) {
             BrandMark(size = 72.dp)
             Spacer(Modifier.height(20.dp))
             Text(
-                "开启你的第一次对话",
+                stringResource(R.string.empty_conversation_heading),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = scheme.onBackground
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "向 LabSage 提问 GPU、Conda 环境或任何实验问题",
+                stringResource(R.string.empty_conversation_description),
                 style = MaterialTheme.typography.bodySmall,
                 color = scheme.onSurfaceVariant,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -220,19 +244,16 @@ private fun EmptyState(onStart: () -> Unit) {
             ) {
                 Icon(Icons.Default.Add, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("开始新会话", fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.start_new_conversation), fontWeight = FontWeight.SemiBold)
             }
         }
     }
 }
 
 @Composable
-private fun GroupHeader(title: String) {
+private fun GroupHeader(titleRes: Int) {
     val scheme = MaterialTheme.colorScheme
-    val (label, icon) = when (title) {
-        "置顶" -> "置顶" to Icons.Default.PushPin
-        else -> title to null
-    }
+    val icon = if (titleRes == R.string.group_pinned) Icons.Default.PushPin else null
     Row(
         Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 14.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -242,7 +263,7 @@ private fun GroupHeader(title: String) {
             Spacer(Modifier.width(5.dp))
         }
         Text(
-            label,
+            stringResource(titleRes),
             style = MaterialTheme.typography.labelLarge.copy(
                 fontWeight = FontWeight.SemiBold,
                 color = scheme.onSurfaceVariant,
@@ -302,7 +323,7 @@ private fun ConversationItem(
                         Spacer(Modifier.width(5.dp))
                     }
                     Text(
-                        conv.title,
+                        conv.title.ifBlank { stringResource(R.string.empty_conversation_title) },
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium, fontSize = 15.sp),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -320,22 +341,22 @@ private fun ConversationItem(
             // Overflow menu
             Box {
                 IconButton(onClick = { showMenu = true }, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.MoreVert, "更多", Modifier.size(18.dp), tint = scheme.onSurfaceVariant)
+                    Icon(Icons.Default.MoreVert, stringResource(R.string.action_more), Modifier.size(18.dp), tint = scheme.onSurfaceVariant)
                 }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                     DropdownMenuItem(
-                        text = { Text(if (conv.isPinned) "取消置顶" else "置顶") },
+                        text = { Text(stringResource(if (conv.isPinned) R.string.unpin_conversation else R.string.pin_conversation)) },
                         leadingIcon = { Icon(Icons.Default.PushPin, null) },
                         onClick = { showMenu = false; onTogglePin() }
                     )
                     DropdownMenuItem(
-                        text = { Text("重命名") },
+                        text = { Text(stringResource(R.string.action_rename)) },
                         leadingIcon = { Icon(Icons.Default.Edit, null) },
                         onClick = { showMenu = false; onRename() }
                     )
                     HorizontalDivider()
                     DropdownMenuItem(
-                        text = { Text("删除", color = scheme.error) },
+                        text = { Text(stringResource(R.string.action_delete), color = scheme.error) },
                         leadingIcon = { Icon(Icons.Default.Delete, null, tint = scheme.error) },
                         onClick = { showMenu = false; onDelete() }
                     )
@@ -349,7 +370,7 @@ private fun ConversationItem(
 // Grouping — pinned first, then today / yesterday / earlier.
 // ============================================================
 
-private data class ConversationGroup(val title: String, val items: List<ConversationEntity>)
+private data class ConversationGroup(val titleRes: Int?, val items: List<ConversationEntity>)
 
 private fun groupConversations(
     items: List<ConversationEntity>,
@@ -357,7 +378,7 @@ private fun groupConversations(
 ): List<ConversationGroup> {
     if (items.isEmpty()) return emptyList()
     // While searching, return a single headerless group (search results).
-    if (isSearching) return listOf(ConversationGroup("", items))
+    if (isSearching) return listOf(ConversationGroup(null, items))
 
     val pinned = items.filter { it.isPinned }
     val unpinned = items.filterNot { it.isPinned }
@@ -376,9 +397,9 @@ private fun groupConversations(
     val earlier = unpinned.filter { it.updatedAt < startToday - dayMs }
 
     val groups = mutableListOf<ConversationGroup>()
-    if (pinned.isNotEmpty()) groups += ConversationGroup("置顶", pinned)
-    if (today.isNotEmpty()) groups += ConversationGroup("今天", today)
-    if (yesterday.isNotEmpty()) groups += ConversationGroup("昨天", yesterday)
-    if (earlier.isNotEmpty()) groups += ConversationGroup("更早", earlier)
+    if (pinned.isNotEmpty()) groups += ConversationGroup(R.string.group_pinned, pinned)
+    if (today.isNotEmpty()) groups += ConversationGroup(R.string.group_today, today)
+    if (yesterday.isNotEmpty()) groups += ConversationGroup(R.string.group_yesterday, yesterday)
+    if (earlier.isNotEmpty()) groups += ConversationGroup(R.string.group_earlier, earlier)
     return groups
 }

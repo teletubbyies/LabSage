@@ -8,8 +8,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.labsage.app.R
 
 @Composable
 fun PartialMessageBanner(
@@ -31,7 +33,7 @@ fun PartialMessageBanner(
                 Icon(Icons.Default.ErrorOutline, null, Modifier.size(18.dp), tint = scheme.error)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "Generation interrupted",
+                    stringResource(R.string.generation_interrupted),
                     style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
                     color = scheme.onErrorContainer
                 )
@@ -51,7 +53,7 @@ fun PartialMessageBanner(
                     shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
                 ) {
-                    Text("Regenerate", style = MaterialTheme.typography.labelLarge)
+                    Text(stringResource(R.string.regenerate), style = MaterialTheme.typography.labelLarge)
                 }
                 Spacer(Modifier.width(8.dp))
                 Button(
@@ -60,7 +62,7 @@ fun PartialMessageBanner(
                     colors = ButtonDefaults.buttonColors(containerColor = scheme.error),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
                 ) {
-                    Text("Continue", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                    Text(stringResource(R.string.continue_generation), style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
                 }
             }
         }

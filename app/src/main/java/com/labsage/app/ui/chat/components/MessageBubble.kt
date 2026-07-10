@@ -13,10 +13,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.labsage.app.R
 import com.labsage.app.ui.theme.LocalExtendedColors
 import dev.jeziellago.compose.markdowntext.MarkdownText
 
@@ -24,60 +26,63 @@ import dev.jeziellago.compose.markdowntext.MarkdownText
 fun MessageBubble(
     role: String,
     content: String,
+    modifier: Modifier = Modifier,
     isStreaming: Boolean = false,
-    traceLines: List<String> = emptyList(),
-    modifier: Modifier = Modifier
+    traceLines: List<String> = emptyList()
 ) {
     val isUser = role == "user"
     val ext = LocalExtendedColors.current
-    val scheme = MaterialTheme.colorScheme
 
-    Row(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 5.dp),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+            .padding(horizontal = 12.dp, vertical = 5.dp)
     ) {
-        Column(
-            modifier = Modifier.widthIn(max = 300.dp),
-            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
-        ) {
-            // Inline trace (assistant only, during streaming)
-            if (!isUser && traceLines.isNotEmpty() && isStreaming) {
-                InlineTraceChip(traceLines)
-                Spacer(Modifier.height(5.dp))
-            }
+        val bubbleMaxWidth = minOf(
+            maxWidth * if (isUser) 0.82f else 0.94f,
+            if (isUser) 420.dp else 680.dp
+        )
 
-            // Bubble — symmetric rounded corners (avatars were removed).
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = if (isUser) ext.userBubble else ext.assistantBubble,
-                shadowElevation = if (isUser) 0.dp else 0.5.dp,
-                tonalElevation = 0.dp
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+        ) {
+            Column(
+                modifier = Modifier.widthIn(max = bubbleMaxWidth),
+                horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
             ) {
-                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    if (!isUser && !isStreaming && content.isNotBlank()) {
-                        // Completed assistant message — render Markdown
-                        MarkdownText(markdown = content)
-                    } else if (!isUser && isStreaming && content.isEmpty()) {
-                        // Empty during streaming — "Thinking..."
-                        Text(
-                            "Thinking",
-                            color = ext.assistantBubbleOn,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        ThinkingDots()
-                    } else {
-                        // User message or streaming partial — plain text
-                        Text(
-                            text = content.ifEmpty { "Thinking" },
-                            color = if (isUser) ext.userBubbleOn else ext.assistantBubbleOn,
-                            style = MaterialTheme.typography.bodyLarge.copy(
-                                lineHeight = 22.sp,
-                                letterSpacing = 0.1.sp
+                if (!isUser && traceLines.isNotEmpty() && isStreaming) {
+                    InlineTraceChip(traceLines)
+                    Spacer(Modifier.height(5.dp))
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = if (isUser) ext.userBubble else ext.assistantBubble,
+                    shadowElevation = if (isUser) 0.dp else 0.5.dp,
+                    tonalElevation = 0.dp
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        if (!isUser && !isStreaming && content.isNotBlank()) {
+                            MarkdownText(markdown = content)
+                        } else if (!isUser && isStreaming && content.isEmpty()) {
+                            Text(
+                                stringResource(R.string.thinking),
+                                color = ext.assistantBubbleOn,
+                                style = MaterialTheme.typography.bodyMedium
                             )
-                        )
+                            Spacer(Modifier.height(2.dp))
+                            ThinkingDots()
+                        } else {
+                            Text(
+                                text = content.ifEmpty { stringResource(R.string.thinking) },
+                                color = if (isUser) ext.userBubbleOn else ext.assistantBubbleOn,
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    lineHeight = 22.sp,
+                                    letterSpacing = 0.1.sp
+                                )
+                            )
+                        }
                     }
                 }
             }
@@ -98,17 +103,17 @@ private fun InlineTraceChip(traceLines: List<String>) {
         it.contains("调用工具") || it.contains("开始调用") || it.contains("调用完成")
     }
     val (icon, text) = when {
-        toolLine == null -> Icons.Default.Search to "Processing..."
+        toolLine == null -> Icons.Default.Search to stringResource(R.string.processing)
         toolLine.contains("调用工具") -> {
             val name = toolLine.substringAfter("调用工具：").substringBefore("(").trim()
-            Icons.Default.Build to "Calling $name..."
+            Icons.Default.Build to stringResource(R.string.calling_tool, name)
         }
-        toolLine.contains("调用完成") -> Icons.Default.CheckCircle to "Tool completed"
+        toolLine.contains("调用完成") -> Icons.Default.CheckCircle to stringResource(R.string.tool_completed)
         toolLine.contains("开始调用") -> {
             val parts = toolLine.substringAfter("开始调用").trim().take(30)
             Icons.Default.PlayArrow to parts
         }
-        else -> Icons.Default.Search to "Analyzing..."
+        else -> Icons.Default.Search to stringResource(R.string.analyzing)
     }
 
     Row(

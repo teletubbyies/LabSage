@@ -71,6 +71,8 @@ class OkHttpSseDataSource(
                     val keep = l.startsWith("[tool]") || l.startsWith("[react]") || l.startsWith("[route")
                     if (!keep) return
                 }
+                // Attempts to add the specified element to this channel without waiting.
+                //trySend never suspends and never throws exceptions.
                 trySend(event)
             }
 

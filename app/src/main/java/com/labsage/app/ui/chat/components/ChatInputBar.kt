@@ -22,10 +22,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import com.labsage.app.R
 import com.labsage.app.ui.theme.brandBrush
 
 /**
@@ -74,7 +76,7 @@ fun ChatInputBar(
                     value = value,
                     onValueChange = onValueChange,
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("向 LabSage 提问…", color = scheme.onSurfaceVariant) },
+                    placeholder = { Text(stringResource(R.string.chat_input_placeholder), color = scheme.onSurfaceVariant) },
                     maxLines = 5,
                     minLines = 1,
                     shape = RoundedCornerShape(24.dp),
@@ -122,7 +124,7 @@ private fun GradientSendButton(enabled: Boolean, onClick: () -> Unit) {
     ) {
         Icon(
             Icons.AutoMirrored.Filled.Send,
-            "Send",
+            stringResource(R.string.send_message),
             tint = if (enabled) Color.White else scheme.onSurfaceVariant,
             modifier = Modifier.size(20.dp)
         )

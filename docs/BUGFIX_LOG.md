@@ -150,6 +150,7 @@
 | 17 | 工具卡片成功也显示"中断" | P1 | 解析错误 | ✅ 已修复 |
 | 18 | 重新生成/继续生成按钮失效 | P1 | 状态丢失 | ✅ 已修复 |
 | 19 | 杀进程后"继续生成"横幅不出现 | P1 | 状态恢复 | ✅ 已修复 |
+| 20 | uploadFile 泄漏 Activity Context | P1 | 内存泄漏 | ✅ 已修复 |
 
 ---
 
@@ -311,3 +312,17 @@
 | **修复** | 新增 `restorePartialStateIfAny(entities)`，在 `init` 的 Room collect 里调用（用 `Idle` 守卫，实际只跑一次）：仅当最后一条是 `assistant` 且 `isPartial=true` 且 `content` 非空时触发；`accumulatedAnswer` ← partial 内容、`streamingMessageId` ← partial 行 id、`chunkCount = 0`；`_streamState` ← `StreamState.Error(partial=true, retryable=true, partialAnswer=内容, lastQuestion=originalQuestion)` |
 | **教训** | 1) **ViewModel 内存状态 ≠ Room 持久状态**：进程死亡清空前者、保留后者，两者不一致时必须从后者重建前者——否则 UI 依赖的内存状态丢失，即使数据还在也"看不见"。2) 重建不是只恢复"显示状态"，还要恢复**驱动后续操作的累加器/句柄**（`accumulatedAnswer`/`streamingMessageId`），否则续写/重生成会撞脏状态。3) 杀进程恢复是"数据落库 + 重开重建"两段式，`is_partial` 是连接两段的线索 |
 | **影响文件** | `ChatViewModel.kt`（新增 `restorePartialStateIfAny`，在 Room collect 中调用） |
+
+---
+
+### 20. uploadFile 把 Activity Context 传入 viewModelScope —— 上传中旋转屏幕泄漏旧 Activity
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | （静态分析发现，非用户可感崩溃）`ChatViewModel.uploadFile(uri, context)` 接收 UI 层传入的 Activity Context 并用于 `viewModelScope.launch`。上传进行中旋转屏幕 → ViewModel 在配置变更时存活（ViewModelStore）→ viewModelScope 存活 → 旧 Activity 的 context 被挂起协程的闭包持有 → 旧 Activity 无法回收，泄漏到上传协程结束 |
+| **根因** | ① `ChatScreen` 取 `LocalContext.current`（= Activity context）调 `viewModel.uploadFile(it, context)`；② `ChatViewModel.uploadFile(context: Context)` 把它传进 `viewModelScope.launch { repository.uploadFile(uri, context) }`，context 被协程闭包捕获；③ `ChatRepository` 本身已持有 `app: LabSageApplication`（Application context），`uploadFile` 只用到 context 的 `contentResolver` 和 `cacheDir`——这俩 Application 全都有，外部传参纯属设计冗余，正是它把 Activity context 引进了长生命周期 scope |
+| **触发条件** | 选文件上传（尤其大文件 + 慢网）过程中旋转屏幕。返回退出**不**触发：`ViewModel.onCleared()` 取消 viewModelScope → 协程在下一个 suspend 点抛 `CancellationException` → context 引用释放 |
+| **修复** | ① `ChatRepository.uploadFile(uri)` 去掉 context 参数，内部改用 `app.contentResolver` / `app.cacheDir`；② `ChatViewModel.uploadFile(uri)` 同步去参；③ `ChatScreen` 调用改为 `viewModel.uploadFile(it)`。同时接入 LeakCanary（`debugImplementation`）做 runtime 兜底，后续若再引入同类泄漏可被自动捕获 |
+| **教训** | ① 能用 Application context 就别让 Activity context 进 ViewModel 的协程 scope——ViewModel 跨配置变更存活，捕获 Activity context 是教科书级泄漏模式；② Repository 既然已持有 Application，需要 Context 的操作就用它，依赖倒置的方向上也不能把短生命周期对象往长生命周期里塞；③ `LocalContext.current` 在 Composable 里拿到的是 Activity context，传进 ViewModel 等于 UI 层对象越界到业务层；④ 静态读代码只能定性"有泄漏嫌疑"，**LeakCanary 才是验证的金标准**，校招项目集成它本身也是加分项 |
+| **影响文件** | `ChatRepository.kt`、`ChatViewModel.kt`、`ChatScreen.kt`、`gradle/libs.versions.toml`、`app/build.gradle.kts` |
+| **面试考点** | ViewModel 为何能在配置变更后存活（`ViewModelStore` + `NonConfigurationInstance`）？Activity context vs Application context 的区别与各自泄漏场景？LeakCanary 检测原理（`WeakReference` + retain 观察 → 触发 GC → dump hprof → 分析到 GC root 的引用链）？ |

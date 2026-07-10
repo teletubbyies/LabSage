@@ -16,11 +16,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -30,18 +33,21 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
 import com.labsage.app.LabSageApplication
+import com.labsage.app.R
 import com.labsage.app.domain.model.QuickAction
 import com.labsage.app.domain.model.StreamState
 import com.labsage.app.ui.chat.components.*
 import com.labsage.app.ui.theme.LocalExtendedColors
 import dev.jeziellago.compose.markdowntext.MarkdownText
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -64,19 +70,43 @@ fun ChatScreen(
     val pendingSend by viewModel.pendingSend.collectAsStateWithLifecycle()
     val settings by app.appSettings.collectAsStateWithLifecycle()
 
-    // Build the quick-action chips from the user's configured default actions.
+    var inputText by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    val isStreaming by remember { derivedStateOf { streamState is StreamState.Streaming } }
+    val isUserDragging by listState.interactionSource.collectIsDraggedAsState()
+    val hasStreamingIndicator = isStreaming && messages.none { it.role == "assistant" && it.isPartial }
+    val hasToolPanel = toolCalls.isNotEmpty() || activeRoute != null
+    val bottomAnchorIndex = messages.size +
+        (if (hasStreamingIndicator) 1 else 0) +
+        (if (hasToolPanel) 1 else 0)
+    val isAtBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            layoutInfo.totalItemsCount == 0 ||
+                layoutInfo.visibleItemsInfo.lastOrNull()?.index == layoutInfo.totalItemsCount - 1
+        }
+    }
+    var autoFollow by remember(conversationId) { mutableStateOf(true) }
+    var initialScrollCompleted by remember(conversationId) { mutableStateOf(false) }
+
+    // Build quick actions after autoFollow so a user-triggered tool request always
+    // brings its new output into view, even if the user had scrolled upward.
     val quickChips = remember(settings.quickActions) {
         settings.quickActions.mapNotNull { action ->
             when (action) {
-                QuickAction.GPU -> QuickChip("GPU", Icons.Default.Memory) { viewModel.queryGpuStatus() }
-                QuickAction.CONDA -> QuickChip("Conda", Icons.Default.Terminal) { viewModel.queryCondaEnv() }
+                QuickAction.GPU -> QuickChip("GPU", Icons.Default.Memory) {
+                    autoFollow = true
+                    viewModel.queryGpuStatus()
+                }
+                QuickAction.CONDA -> QuickChip("Conda", Icons.Default.Terminal) {
+                    autoFollow = true
+                    viewModel.queryCondaEnv()
+                }
             }
         }
     }
 
-    var inputText by remember { mutableStateOf("") }
-    val listState = rememberLazyListState()
-    val isStreaming by remember { derivedStateOf { streamState is StreamState.Streaming } }
     var consumedTargetMessageId by remember(conversationId) { mutableStateOf<Long?>(null) }
     val hasPendingMessageTarget = targetMessageId != null &&
         consumedTargetMessageId != targetMessageId
@@ -119,18 +149,31 @@ fun ChatScreen(
     }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { viewModel.uploadFile(it, context) }
+        uri?.let { viewModel.uploadFile(it) }
     }
 
-    // Auto-scroll: animate on new messages, snap on content updates (faster)
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty() && !hasPendingMessageTarget) {
-            listState.animateScrollToItem(messages.size - 1)
+    // A user drag decides whether future stream chunks keep following the bottom.
+    LaunchedEffect(isUserDragging) {
+        if (!isUserDragging) autoFollow = isAtBottom
+    }
+
+    // Initial load and newly appended messages target a dedicated bottom anchor,
+    // so a very tall last message is positioned at its actual end, not its top.
+    LaunchedEffect(messages.size, hasPendingMessageTarget, hasStreamingIndicator, hasToolPanel) {
+        if (messages.isEmpty() || hasPendingMessageTarget) return@LaunchedEffect
+        if (!initialScrollCompleted) {
+            listState.scrollToBottom(bottomAnchorIndex, animated = false)
+            initialScrollCompleted = true
+        } else if (autoFollow) {
+            listState.scrollToBottom(bottomAnchorIndex, animated = true)
         }
     }
-    // Snap scroll on streaming content updates — avoid per-chunk animation jank
+
+    // Snap on stream chunks to avoid stacking hundreds of scroll animations.
     LaunchedEffect(messages.lastOrNull()?.content) {
-        if (isStreaming && messages.isNotEmpty()) listState.scrollToItem(messages.size - 1)
+        if (isStreaming && initialScrollCompleted && autoFollow) {
+            listState.scrollToBottom(bottomAnchorIndex, animated = false)
+        }
     }
     // Notification navigation waits for Room's first emission, then positions the
     // exact persisted assistant message instead of merely opening the conversation.
@@ -141,10 +184,12 @@ fun ChatScreen(
         if (targetIndex >= 0) {
             listState.scrollToItem(targetIndex)
             consumedTargetMessageId = target
+            initialScrollCompleted = true
+            autoFollow = false
         }
     }
 
-    var showTools by remember { mutableStateOf(false) }
+    var showMoreActions by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = scheme.background,
@@ -154,29 +199,51 @@ fun ChatScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         BrandMark(size = 30.dp)
                         Spacer(Modifier.width(10.dp))
-                        Text("LabSage", fontWeight = FontWeight.Bold, color = scheme.onSurface)
+                        Text(stringResource(R.string.app_name), fontWeight = FontWeight.Bold, color = scheme.onSurface)
                     }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = scheme.onSurface)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back), tint = scheme.onSurface)
                     }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.loadSessionContext() }) {
-                        Icon(Icons.Default.Description, "Summary", tint = scheme.onSurfaceVariant)
+                    IconButton(onClick = { filePicker.launch("*/*") }) {
+                        Icon(Icons.Default.AttachFile, stringResource(R.string.attach_file), tint = scheme.onSurfaceVariant)
                     }
                     Box {
-                        IconButton(onClick = { showTools = true }) {
-                            Icon(Icons.Default.Build, "Tools", tint = scheme.onSurfaceVariant)
+                        IconButton(onClick = { showMoreActions = true }) {
+                            Icon(Icons.Default.MoreVert, stringResource(R.string.more_chat_actions), tint = scheme.onSurfaceVariant)
                         }
-                        DropdownMenu(expanded = showTools, onDismissRequest = { showTools = false }, offset = DpOffset(0.dp, 0.dp)) {
-                            DropdownMenuItem(text = { Text("查询 GPU 状态") }, leadingIcon = { Icon(Icons.Default.Memory, null) }, onClick = { showTools = false; viewModel.queryGpuStatus() })
-                            DropdownMenuItem(text = { Text("查询 Conda 环境") }, leadingIcon = { Icon(Icons.Default.Terminal, null) }, onClick = { showTools = false; viewModel.queryCondaEnv() })
+                        DropdownMenu(expanded = showMoreActions, onDismissRequest = { showMoreActions = false }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.session_summary)) },
+                                leadingIcon = { Icon(Icons.Default.Description, null) },
+                                onClick = {
+                                    showMoreActions = false
+                                    viewModel.loadSessionContext()
+                                }
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.query_gpu_status)) },
+                                leadingIcon = { Icon(Icons.Default.Memory, null) },
+                                onClick = {
+                                    showMoreActions = false
+                                    autoFollow = true
+                                    viewModel.queryGpuStatus()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.query_conda_environment)) },
+                                leadingIcon = { Icon(Icons.Default.Terminal, null) },
+                                onClick = {
+                                    showMoreActions = false
+                                    autoFollow = true
+                                    viewModel.queryCondaEnv()
+                                }
+                            )
                         }
-                    }
-                    IconButton(onClick = { filePicker.launch("*/*") }) {
-                        Icon(Icons.Default.AttachFile, "Upload", tint = scheme.onSurfaceVariant)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = scheme.surface)
@@ -184,7 +251,7 @@ fun ChatScreen(
         },
         bottomBar = {
             ChatInputBar(value = inputText, onValueChange = { inputText = it },
-                onSend = { if (inputText.isNotBlank()) { viewModel.sendMessage(inputText.trim()); inputText = "" } },
+                onSend = { if (inputText.isNotBlank()) { autoFollow = true; viewModel.sendMessage(inputText.trim()); inputText = "" } },
                 enabled = !isStreaming, quickChips = quickChips,
                 onVoiceResult = { recognized ->
                     // Append recognized speech to whatever is already typed.
@@ -199,39 +266,86 @@ fun ChatScreen(
                     Row(Modifier.padding(horizontal = 16.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.CloudOff, null, Modifier.size(16.dp), tint = scheme.onErrorContainer)
                         Spacer(Modifier.width(8.dp))
-                        Text("No network connection", style = MaterialTheme.typography.labelMedium, color = scheme.onErrorContainer)
+                        Text(stringResource(R.string.no_network_connection), style = MaterialTheme.typography.labelMedium, color = scheme.onErrorContainer)
                     }
                 }
             }
 
-            LazyColumn(Modifier.weight(1f), state = listState, contentPadding = PaddingValues(vertical = 8.dp)) {
-                items(messages, key = { it.id }) { msg ->
-                    var showMenu by remember { mutableStateOf(false) }
-                    Box {
-                        MessageBubble(msg.role, msg.content, msg.isPartial && isStreaming,
-                            if (msg.isPartial && isStreaming && msg.role == "assistant") traceLines else emptyList(),
-                            Modifier.combinedClickable(onClick = {}, onLongClick = { showMenu = true }))
-                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                            DropdownMenuItem(text = { Text("Copy") }, leadingIcon = { Icon(Icons.Default.ContentCopy, null) }, onClick = {
-                                showMenu = false
-                                (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-                                    .setPrimaryClip(ClipData.newPlainText("msg", msg.content))
-                                Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-                            })
-                            DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
-                                showMenu = false
-                                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, msg.content) }, "Share"))
-                            })
-                            if (msg.role == "user") DropdownMenuItem(text = { Text("Re-edit") }, leadingIcon = { Icon(Icons.Default.Edit, null) }, onClick = { showMenu = false; inputText = msg.content })
+            Box(Modifier.weight(1f)) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    state = listState,
+                    contentPadding = PaddingValues(vertical = 8.dp)
+                ) {
+                    items(messages, key = { it.id }) { msg ->
+                        var showMenu by remember { mutableStateOf(false) }
+                        Box {
+                            MessageBubble(
+                                role = msg.role,
+                                content = msg.content,
+                                modifier = Modifier.combinedClickable(
+                                    onClick = {},
+                                    onLongClick = { showMenu = true }
+                                ),
+                                isStreaming = msg.isPartial && isStreaming,
+                                traceLines = if (msg.isPartial && isStreaming && msg.role == "assistant") {
+                                    traceLines
+                                } else {
+                                    emptyList()
+                                }
+                            )
+                            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                DropdownMenuItem(text = { Text(stringResource(R.string.copy_message)) }, leadingIcon = { Icon(Icons.Default.ContentCopy, null) }, onClick = {
+                                    showMenu = false
+                                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                                        .setPrimaryClip(ClipData.newPlainText("message", msg.content))
+                                    Toast.makeText(context, context.getString(R.string.message_copied), Toast.LENGTH_SHORT).show()
+                                })
+                                DropdownMenuItem(text = { Text(stringResource(R.string.share_message)) }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
+                                    showMenu = false
+                                    context.startActivity(
+                                        Intent.createChooser(
+                                            Intent(Intent.ACTION_SEND).apply {
+                                                type = "text/plain"
+                                                putExtra(Intent.EXTRA_TEXT, msg.content)
+                                            },
+                                            context.getString(R.string.share_message_chooser)
+                                        )
+                                    )
+                                })
+                                if (msg.role == "user") {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.re_edit_message)) },
+                                        leadingIcon = { Icon(Icons.Default.Edit, null) },
+                                        onClick = {
+                                            showMenu = false
+                                            inputText = msg.content
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
+                    if (hasStreamingIndicator) {
+                        item(key = "streaming_indicator") { StreamingIndicator() }
+                    }
+                    if (hasToolPanel) {
+                        item(key = "tool_panel") {
+                            ToolExecutionPanel(toolCalls = toolCalls, route = activeRoute)
+                        }
+                    }
+                    item(key = "bottom_anchor") { Spacer(Modifier.height(1.dp)) }
                 }
-                if (isStreaming && messages.none { it.role == "assistant" && it.isPartial }) {
-                    item { StreamingIndicator() }
-                }
-                if (toolCalls.isNotEmpty() || activeRoute != null) {
-                    item(key = "tool_panel") {
-                        ToolExecutionPanel(toolCalls = toolCalls, route = activeRoute)
+
+                if (messages.isNotEmpty() && !isAtBottom) {
+                    FilledTonalIconButton(
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
+                        onClick = {
+                            autoFollow = true
+                            coroutineScope.launch { listState.scrollToBottom(bottomAnchorIndex, animated = true) }
+                        }
+                    ) {
+                        Icon(Icons.Default.ArrowDownward, stringResource(R.string.scroll_to_bottom))
                     }
                 }
             }
@@ -249,7 +363,7 @@ fun ChatScreen(
                         Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.CheckCircle, null, Modifier.size(16.dp), tint = scheme.primary)
                             Spacer(Modifier.width(8.dp))
-                            Text("Response complete", style = MaterialTheme.typography.labelMedium, color = scheme.primary, fontWeight = FontWeight.Medium)
+                            Text(stringResource(R.string.response_complete), style = MaterialTheme.typography.labelMedium, color = scheme.primary, fontWeight = FontWeight.Medium)
                         }
                     }
                 }
@@ -257,7 +371,7 @@ fun ChatScreen(
 
             when (val s = streamState) {
                 is StreamState.Error -> if (s.retryable) PartialMessageBanner(s.message, { viewModel.continueGeneration() }, { viewModel.regenerate() })
-                else Snackbar(Modifier.padding(16.dp)) { Text("Error: ${s.message}") }
+                else Snackbar(Modifier.padding(16.dp)) { Text(stringResource(R.string.error_message, s.message)) }
                 else -> {}
             }
         }
@@ -269,10 +383,10 @@ fun ChatScreen(
         AlertDialog(
             onDismissRequest = { viewModel.cancelPendingSend() },
             icon = { Icon(Icons.Default.Verified, null, tint = scheme.primary) },
-            title = { Text("确认执行", fontWeight = FontWeight.SemiBold) },
+            title = { Text(stringResource(R.string.approval_title), fontWeight = FontWeight.SemiBold) },
             text = {
                 Column {
-                    Text("审批模式已开启。发送此消息可能触发后端工具调用：", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.approval_description), style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(8.dp))
                     Surface(shape = RoundedCornerShape(12.dp), color = scheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
                         Text(pending, Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
@@ -281,59 +395,373 @@ fun ChatScreen(
             },
             confirmButton = {
                 Button(onClick = { viewModel.confirmPendingSend() }, shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = scheme.primary)) {
-                    Text("允许发送")
+                    Text(stringResource(R.string.allow_send))
                 }
             },
-            dismissButton = { TextButton(onClick = { viewModel.cancelPendingSend() }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { viewModel.cancelPendingSend() }) { Text(stringResource(R.string.action_cancel)) } }
         )
     }
 
-    // Session context dialog
+    // Session context editor and structured facts manager.
     val ctx = sessionContext
     if (ctx != null) {
-        var editText by remember(ctx) { mutableStateOf(ctx.summary) }
-        AlertDialog(
-            onDismissRequest = { viewModel.dismissSessionContext() },
-            icon = { Icon(Icons.Default.Description, null, tint = scheme.primary) },
-            title = { Text("Session Summary", fontWeight = FontWeight.SemiBold) },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = editText, onValueChange = { editText = it },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 130.dp),
-                        label = { Text("Summary (Markdown)") },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = scheme.primary, cursorColor = scheme.primary)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text("Preview", style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
-                    Spacer(Modifier.height(4.dp))
+        SessionContextSheet(
+            context = ctx,
+            onDismiss = viewModel::dismissSessionContext,
+            onSaveSummary = viewModel::updateSessionSummary,
+            onDeleteFact = viewModel::deleteSessionFact,
+            onClearError = viewModel::clearSessionContextError
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SessionContextSheet(
+    context: SessionContextUi,
+    onDismiss: () -> Unit,
+    onSaveSummary: (String) -> Unit,
+    onDeleteFact: (String) -> Unit,
+    onClearError: () -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var editText by remember(context.summary) { mutableStateOf(context.summary) }
+    var showPreview by rememberSaveable { mutableStateOf(false) }
+    var pendingDeletion by remember { mutableStateOf<SessionFactUi?>(null) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = scheme.surface,
+        dragHandle = { BottomSheetDefaults.DragHandle() }
+    ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.92f)
+                .imePadding(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item(key = "context_header") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = scheme.surfaceVariant,
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp)
+                        color = scheme.primaryContainer,
+                        modifier = Modifier.size(42.dp)
                     ) {
-                        if (editText.isNotBlank()) {
-                            MarkdownText(
-                                markdown = editText,
-                                modifier = Modifier.padding(10.dp)
-                            )
-                        } else {
-                            Text("Summary preview will appear here", Modifier.padding(10.dp), style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Description, null, tint = scheme.primary)
                         }
                     }
-                    if (ctx.facts.isNotBlank()) {
-                        Spacer(Modifier.height(12.dp))
-                        Text("Facts · auto-generated", style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
-                        Spacer(Modifier.height(4.dp))
-                        Surface(shape = RoundedCornerShape(12.dp), color = scheme.surfaceVariant) {
-                            MarkdownText(markdown = ctx.facts.take(500), modifier = Modifier.padding(10.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            stringResource(R.string.session_summary),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            stringResource(R.string.summary_editor_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, stringResource(R.string.action_close))
+                    }
+                }
+            }
+
+            if (context.isSaving) {
+                item(key = "context_progress") {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+            }
+
+            context.errorMessage?.let { error ->
+                item(key = "context_error") {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = scheme.errorContainer
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.ErrorOutline, null, tint = scheme.onErrorContainer)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                stringResource(R.string.context_operation_failed, error),
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onErrorContainer
+                            )
+                            IconButton(onClick = onClearError) {
+                                Icon(Icons.Default.Close, stringResource(R.string.action_close), tint = scheme.onErrorContainer)
+                            }
                         }
                     }
                 }
+            }
+
+            item(key = "summary_editor") {
+                Column {
+                    Text(
+                        stringResource(R.string.session_summary),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editText,
+                        onValueChange = { editText = it },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 130.dp, max = 220.dp),
+                        label = { Text(stringResource(R.string.summary_markdown_label)) },
+                        enabled = !context.isSaving,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = scheme.primary,
+                            cursorColor = scheme.primary
+                        )
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { showPreview = !showPreview }) {
+                            Icon(
+                                if (showPreview) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                null,
+                                Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(if (showPreview) R.string.hide_preview else R.string.show_preview))
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = { onSaveSummary(editText.trim()) },
+                            enabled = !context.isSaving && editText.trim() != context.summary,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(stringResource(R.string.save_summary))
+                        }
+                    }
+                }
+            }
+
+            if (showPreview) {
+                item(key = "summary_preview") {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = scheme.surfaceVariant,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (editText.isNotBlank()) {
+                            MarkdownText(markdown = editText, modifier = Modifier.padding(14.dp))
+                        } else {
+                            Text(
+                                stringResource(R.string.summary_preview_placeholder),
+                                Modifier.padding(14.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            item(key = "facts_divider") { HorizontalDivider() }
+
+            item(key = "facts_header") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            stringResource(R.string.structured_facts),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            stringResource(R.string.facts_count, context.facts.size),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(Icons.Default.DataObject, null, tint = scheme.primary)
+                }
+            }
+
+            when {
+                !context.factsJsonValid -> {
+                    item(key = "facts_invalid") {
+                        InvalidFactsCard(context.factsRaw)
+                    }
+                }
+                context.facts.isEmpty() -> {
+                    item(key = "facts_empty") {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = scheme.surfaceVariant.copy(alpha = 0.65f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(Icons.Default.Inventory2, null, tint = scheme.onSurfaceVariant)
+                                Spacer(Modifier.height(8.dp))
+                                Text(stringResource(R.string.facts_empty), fontWeight = FontWeight.Medium)
+                                Spacer(Modifier.height(3.dp))
+                                Text(
+                                    stringResource(R.string.facts_empty_description),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = scheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+                else -> {
+                    items(context.facts, key = { "fact_${it.key}" }) { fact ->
+                        FactCard(
+                            fact = fact,
+                            deleteEnabled = !context.isSaving,
+                            onDelete = { pendingDeletion = fact }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    pendingDeletion?.let { fact ->
+        AlertDialog(
+            onDismissRequest = { pendingDeletion = null },
+            icon = { Icon(Icons.Default.DeleteOutline, null, tint = scheme.error) },
+            title = { Text(stringResource(R.string.delete_fact)) },
+            text = { Text(stringResource(R.string.delete_fact_confirmation, fact.key)) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pendingDeletion = null
+                        onDeleteFact(fact.key)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = scheme.error)
+                ) {
+                    Text(stringResource(R.string.action_delete))
+                }
             },
-            confirmButton = { Button(onClick = { viewModel.updateSessionSummary(editText) }, shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = scheme.primary)) { Text("Save") } },
-            dismissButton = { TextButton(onClick = { viewModel.dismissSessionContext() }) { Text("Close") } }
+            dismissButton = {
+                TextButton(onClick = { pendingDeletion = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
         )
     }
+}
+
+@Composable
+private fun FactCard(
+    fact: SessionFactUi,
+    deleteEnabled: Boolean,
+    onDelete: () -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = scheme.surfaceVariant.copy(alpha = 0.72f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(start = 14.dp, top = 10.dp, end = 6.dp, bottom = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.fact_key),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = scheme.onSurfaceVariant
+                    )
+                    Text(
+                        fact.key,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
+                IconButton(onClick = onDelete, enabled = deleteEnabled) {
+                    Icon(
+                        Icons.Default.DeleteOutline,
+                        stringResource(R.string.delete_fact),
+                        tint = scheme.error
+                    )
+                }
+            }
+            HorizontalDivider(Modifier.padding(end = 8.dp))
+            Spacer(Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.fact_value),
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(3.dp))
+            SelectionContainer {
+                Text(
+                    fact.value,
+                    modifier = Modifier.padding(end = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = if (fact.value.startsWith("{") || fact.value.startsWith("[")) {
+                            FontFamily.Monospace
+                        } else {
+                            FontFamily.Default
+                        }
+                    )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun InvalidFactsCard(rawFacts: String) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = scheme.errorContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.WarningAmber, null, tint = scheme.onErrorContainer)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    stringResource(R.string.facts_invalid_json),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onErrorContainer
+                )
+            }
+            if (rawFacts.isNotBlank()) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    stringResource(R.string.raw_json),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = scheme.onErrorContainer
+                )
+                Spacer(Modifier.height(4.dp))
+                SelectionContainer {
+                    Text(
+                        rawFacts,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = scheme.onErrorContainer
+                    )
+                }
+            }
+        }
+    }
+}
+
+private suspend fun LazyListState.scrollToBottom(bottomAnchorIndex: Int, animated: Boolean) {
+    if (animated) animateScrollToItem(bottomAnchorIndex) else scrollToItem(bottomAnchorIndex)
 }

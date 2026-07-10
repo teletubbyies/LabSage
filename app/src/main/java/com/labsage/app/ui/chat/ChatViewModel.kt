@@ -162,6 +162,7 @@ class ChatViewModel(
     }
 
     private fun doSend(question: String) {
+        // send and collect response
         if (_streamState.value is StreamState.Streaming) return
         lastQuestion = question
 
@@ -186,6 +187,8 @@ class ChatViewModel(
             chunkCount = 0
 
             // Open SSE stream
+            // data from network io, including chat data stored in db, and tool chain usage stored in memory.
+            // streamingJob is under viewModelScope not under before coroutine
             streamingJob = viewModelScope.launch {
                 repository.sendStreamMessage(conversationId, question)
                     .catch { e -> handleStreamException(e) }
@@ -235,10 +238,10 @@ class ChatViewModel(
     // File upload
     // ============================================================
 
-    fun uploadFile(uri: Uri, context: android.content.Context) {
+    fun uploadFile(uri: Uri) {
         viewModelScope.launch {
             _uploadState.value = UploadState.Uploading
-            val result = repository.uploadFile(uri, context)
+            val result = repository.uploadFile(uri)
             _uploadState.value = result.fold(
                 onSuccess = { data ->
                     // Add a system message about the upload
@@ -547,32 +550,75 @@ class ChatViewModel(
         viewModelScope.launch {
             val result = repository.getSessionContext(conversationId)
             result.onSuccess { data ->
+                val parsedFacts = SessionFactsJson.parse(data.facts)
                 _sessionContext.value = SessionContextUi(
                     summary = data.summary,
-                    facts = data.facts,
-                    isEditing = false
+                    factsRaw = data.facts,
+                    facts = parsedFacts.orEmpty(),
+                    factsJsonValid = parsedFacts != null
                 )
             }.onFailure { e ->
                 _sessionContext.value = SessionContextUi(
-                    summary = "Failed to load: ${e.message}",
-                    facts = "",
-                    isEditing = false
+                    summary = "",
+                    factsRaw = "",
+                    facts = emptyList(),
+                    factsJsonValid = true,
+                    errorMessage = e.message ?: "Session context load failed"
                 )
             }
         }
     }
 
     fun updateSessionSummary(newSummary: String) {
+        val current = _sessionContext.value ?: return
+        _sessionContext.value = current.copy(isSaving = true, errorMessage = null)
         viewModelScope.launch {
             val result = repository.updateSessionSummary(conversationId, newSummary)
             result.onSuccess {
-                _sessionContext.value = null  // dismiss dialog on success
+                _sessionContext.value = _sessionContext.value?.copy(
+                    summary = newSummary,
+                    isSaving = false,
+                    errorMessage = null
+                )
             }.onFailure { e ->
                 _sessionContext.value = _sessionContext.value?.copy(
-                    summary = "Save failed: ${e.message}\n\n$newSummary"
+                    isSaving = false,
+                    errorMessage = e.message ?: "Session summary update failed"
                 )
             }
         }
+    }
+
+    fun deleteSessionFact(key: String) {
+        val current = _sessionContext.value ?: return
+        val updatedFactsRaw = SessionFactsJson.remove(current.factsRaw, key)
+        if (updatedFactsRaw == null) {
+            _sessionContext.value = current.copy(errorMessage = "Fact JSON is invalid or the key no longer exists")
+            return
+        }
+
+        _sessionContext.value = current.copy(isSaving = true, errorMessage = null)
+        viewModelScope.launch {
+            val result = repository.updateSessionFacts(conversationId, updatedFactsRaw)
+            result.onSuccess {
+                _sessionContext.value = _sessionContext.value?.copy(
+                    factsRaw = updatedFactsRaw,
+                    facts = SessionFactsJson.parse(updatedFactsRaw).orEmpty(),
+                    factsJsonValid = true,
+                    isSaving = false,
+                    errorMessage = null
+                )
+            }.onFailure { e ->
+                _sessionContext.value = _sessionContext.value?.copy(
+                    isSaving = false,
+                    errorMessage = e.message ?: "Session fact deletion failed"
+                )
+            }
+        }
+    }
+
+    fun clearSessionContextError() {
+        _sessionContext.value = _sessionContext.value?.copy(errorMessage = null)
     }
 
     fun dismissSessionContext() {
@@ -614,8 +660,11 @@ class ChatViewModel(
 @androidx.compose.runtime.Immutable
 data class SessionContextUi(
     val summary: String,
-    val facts: String,
-    val isEditing: Boolean
+    val factsRaw: String,
+    val facts: List<SessionFactUi>,
+    val factsJsonValid: Boolean,
+    val isSaving: Boolean = false,
+    val errorMessage: String? = null
 )
 
 @androidx.compose.runtime.Immutable

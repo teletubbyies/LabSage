@@ -103,6 +103,7 @@ class SseParser {
     fun flush(): RawSseFrame?             // 流结束后刷新残留数据
 }
 ```
+所以消息正文（包括"正在打字"的半成品）确实走的是链 B：SSE 事件 → handleSseEvent 写库 → Room 监听到变化 → emit → collect → _messages → UI 重组。
 
 **OkHttp 配置要点**：
 - SSE 客户端禁用 `HttpLoggingInterceptor.Level.BODY`（会缓冲整个流导致 `onResponse` 永不触发）

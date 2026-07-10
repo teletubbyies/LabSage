@@ -1,6 +1,5 @@
 package com.labsage.app.data.repository
 
-import android.content.Context
 import android.net.Uri
 import com.labsage.app.LabSageApplication
 import com.labsage.app.data.local.dao.ConversationDao
@@ -90,9 +89,18 @@ class ChatRepository(
     // File upload
     // ============================================================
 
-    suspend fun uploadFile(uri: Uri, context: Context): Result<UploadData> {
+    /**
+     * Upload a file picked from a content URI.
+     *
+     * Uses the Application context ([app]) for the ContentResolver and cache dir
+     * rather than taking one as a parameter. The repository outlives any Activity
+     * (it is a lazy singleton on the Application), so a caller-supplied Activity
+     * context captured by this suspending call would leak across a configuration
+     * change while the upload is in flight (viewModelScope survives rotation).
+     */
+    suspend fun uploadFile(uri: Uri): Result<UploadData> {
         return try {
-            val contentResolver = context.contentResolver
+            val contentResolver = app.contentResolver
 
             // Resolve file name from content URI
             val cursor = contentResolver.query(uri, null, null, null, null)
@@ -104,7 +112,7 @@ class ChatRepository(
             } ?: "uploaded_file"
 
             // Copy content to a temp file (needed for OkHttp request body)
-            val tempFile = File(context.cacheDir, "upload_$fileName")
+            val tempFile = File(app.cacheDir, "upload_$fileName")
             contentResolver.openInputStream(uri)?.use { input ->
                 tempFile.outputStream().use { output ->
                     input.copyTo(output)
@@ -231,10 +239,27 @@ class ChatRepository(
     }
 
     suspend fun updateSessionSummary(sessionId: String, summary: String): Result<Boolean> {
+        return updateSessionContext(
+            UpdateSessionContextRequest(id = sessionId, summary = summary)
+        )
+    }
+
+    suspend fun updateSessionFacts(sessionId: String, facts: String): Result<Boolean> {
+        return updateSessionContext(
+            UpdateSessionContextRequest(id = sessionId, facts = facts)
+        )
+    }
+
+    private suspend fun updateSessionContext(
+        request: UpdateSessionContextRequest
+    ): Result<Boolean> {
         return try {
-            val request = UpdateSessionContextRequest(id = sessionId, summary = summary)
             val response = app.api.updateSessionContext(request)
-            Result.success(response.data?.ok == true)
+            if (response.data?.ok == true) {
+                Result.success(true)
+            } else {
+                Result.failure(Exception(response.message.ifBlank { "Session context update failed" }))
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }

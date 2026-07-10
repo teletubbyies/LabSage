@@ -82,6 +82,9 @@ dependencies {
     // Markdown rendering — jeziellago/compose-markdown
     implementation(libs.markdown.renderer)
 
+    // Leak detection (debug builds only — ships no code in release via ContentProvider auto-init)
+    debugImplementation(libs.leakcanary)
+
     // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

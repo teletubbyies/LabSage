@@ -9,8 +9,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -23,6 +25,13 @@ class ConversationListViewModel(
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
     /**
+     * Conversations staged for deletion are hidden immediately, but remain in
+     * Room until the Snackbar timeout finishes. This keeps Undo lossless even
+     * though the real delete cascades to every message in the conversation.
+     */
+    private val pendingDeletionIds = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
      * Switches between the full ordered list (query blank) and title search
      * results (query non-blank). Both preserve pinned-first ordering from the DAO.
      */
@@ -30,6 +39,9 @@ class ConversationListViewModel(
         .flatMapLatest { query ->
             if (query.isBlank()) repository.getAllConversations()
             else repository.searchConversations(query.trim())
+        }
+        .combine(pendingDeletionIds) { conversations, pendingIds ->
+            conversations.filterNot { it.id in pendingIds }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -42,11 +54,21 @@ class ConversationListViewModel(
         return id
     }
 
-    fun deleteConversation(id: String) {
-        // Fire-and-forget, no need for answer, time to end.
-        // launch on main Thread on default.
+    fun stageDeleteConversation(id: String) {
+        pendingDeletionIds.update { it + id }
+    }
+
+    fun undoDeleteConversation(id: String) {
+        pendingDeletionIds.update { it - id }
+    }
+
+    fun commitDeleteConversation(id: String) {
         viewModelScope.launch {
-            repository.deleteConversation(id)
+            try {
+                repository.deleteConversation(id)
+            } finally {
+                pendingDeletionIds.update { it - id }
+            }
         }
     }
 
