@@ -130,6 +130,13 @@ class ChatViewModel(
                 .conflate()  // drop intermediate emissions when consumer is slow
                 .collect { entities ->
                     _messages.value = entities.map { it.toUiState() }
+                    // Rehydrate resume state from a persisted partial reply — see
+                    // [restorePartialStateIfAny]. Force-closing the app mid-stream
+                    // kills the process and wipes in-memory _streamState, yet the
+                    // partial message is already flushed to Room every 5th chunk.
+                    // Without this the "继续生成" banner never reappears on reopen,
+                    // even though the partial content survived.
+                    restorePartialStateIfAny(entities)
                 }
         }
         // Sync approval mode from persisted settings (single source of truth).
@@ -401,6 +408,40 @@ class ChatViewModel(
 
     private suspend fun deleteMessage(id: Long) {
         repository.deleteMessage(id)
+    }
+
+    /**
+     * Rebuild in-memory resume state from a persisted partial assistant message.
+     *
+     * Called on every Room emission but guarded by [StreamState.Idle], so it
+     * effectively runs once — right after the ViewModel is (re)created. Covers
+     * the force-close-mid-stream case: process death wipes [_streamState],
+     * [accumulatedAnswer] and [streamingMessageId], yet the partial reply was
+     * already flushed to Room every 5th chunk. We restore all three so that:
+     *   - the "继续生成 / 重新生成" banner shows again (Error + retryable), and
+     *   - [continueGeneration] appends the backend's delta onto [accumulatedAnswer]
+     *     (which now holds the partial) → finalizes partial + continuation into
+     *     the SAME row, instead of overwriting it with the tail only, and
+     *   - [regenerate] deletes the right partial row via [streamingMessageId].
+     *
+     * Only fires for a non-empty partial assistant message: an empty partial row
+     * cannot be resumed (mirrors the isNotEmpty() guard in the error handlers).
+     */
+    private fun restorePartialStateIfAny(entities: List<MessageEntity>) {
+        if (_streamState.value !is StreamState.Idle) return
+        val last = entities.lastOrNull() ?: return
+        if (last.role != "assistant" || !last.isPartial || last.content.isEmpty()) return
+        accumulatedAnswer.clear()
+        accumulatedAnswer.append(last.content)
+        streamingMessageId = last.id
+        chunkCount = 0
+        _streamState.value = StreamState.Error(
+            partial = true,
+            retryable = true,
+            partialAnswer = last.content,
+            lastQuestion = last.originalQuestion ?: "",
+            message = ""  // banner title "生成已中断" already conveys it
+        )
     }
 
     fun clearError() {
