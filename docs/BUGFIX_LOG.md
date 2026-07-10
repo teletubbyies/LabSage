@@ -149,6 +149,7 @@
 | 16 | 测试连接输入非法 URL 崩溃 | P1 | 异常未捕获 | ✅ 已修复 |
 | 17 | 工具卡片成功也显示"中断" | P1 | 解析错误 | ✅ 已修复 |
 | 18 | 重新生成/继续生成按钮失效 | P1 | 状态丢失 | ✅ 已修复 |
+| 19 | 杀进程后"继续生成"横幅不出现 | P1 | 状态恢复 | ✅ 已修复 |
 
 ---
 
@@ -297,3 +298,16 @@
 | **修复** | 两处构造非 partial `StreamState.Error` 的地方都补上 `lastQuestion = lastQuestion`（类字段此刻仍持有正确问题——`doSend` 在开流前就赋值，error 处理不重置它）：① `handleSseEvent` 的 `else` 分支；② `handleStreamException` 的 `else` 分支（后者 `retryable=false` 不显示横幅，但 `regenerate()` 不检查 retryable，为一致性一并补上） |
 | **教训** | 1) `StreamState.Error` 里的 `lastQuestion` 是"恢复用快照"，**每一条进入 Error 的路径都必须填**，否则任何依赖它恢复的操作都会拿到空值——状态对象的"恢复字段"必须与所有进入路径一一对应，漏一条路径就漏一种场景的恢复能力。2) 类字段 `lastQuestion`（实时值）和 Error 数据类里的 `lastQuestion`（进入 Error 时的快照）是两份东西，恢复逻辑读哪个决定 bug 有没有——读快照更安全（不被后续状态污染），但前提是快照在进入 Error 时被正确写入。3) 调试"按钮点了没反应"：先确认回调有没有被调（这里被调了），再看回调依赖的状态字段是不是空——`state.lastQuestion == ""` 是破案线索 |
 | **影响文件** | `ChatViewModel.kt`（`handleSseEvent` 非 partial 分支、`handleStreamException` 非 partial 分支） |
+
+---
+
+### 19. 流式中途杀进程后"继续生成"横幅不出现 —— 残留 partial 消息未重建内存状态
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | SSE 流式回答中途直接关闭应用（杀进程），重开后**消息没丢**（partial 内容已落盘 Room），但底部的"继续生成 / 重新生成"横幅（`PartialMessageBanner`）不再出现，无法续写或重生成 |
+| **根因** | `_streamState`、`accumulatedAnswer`、`streamingMessageId` 都是 **ViewModel 内存状态**，进程被杀即全部清零。但 partial 回答每 5 个 chunk 已写入 Room（`isPartial=true` + `originalQuestion` 已存），**数据层没丢**。问题在 `ChatViewModel.init` 只把 Room 消息灌进 `_messages`，**没有从残留 partial 消息重建 `_streamState`**，重开后停在 `Idle`；而 `ChatScreen` 只在 `StreamState.Error && retryable` 时才渲染横幅 → 按钮不出现 |
+| **关键约束（决定修复方式）** | `continueGeneration()` 不清空 `accumulatedAnswer`、不重置 `streamingMessageId`——它依赖这两个累加器跨调用存活（后端续写只发 delta，客户端在内存里拼 `partial + 续写`）。所以重建时不能只设 `_streamState`，必须**同时把 `accumulatedAnswer` 和 `streamingMessageId` 也从 Room 灌回来**，否则：① 点 Continue → `accumulatedAnswer` 为空 → 续写 delta 覆盖 partial 行、丢前半段；② 点 Regenerate → `streamingMessageId` 为 null → 删不掉旧 partial 行、产生重复 |
+| **修复** | 新增 `restorePartialStateIfAny(entities)`，在 `init` 的 Room collect 里调用（用 `Idle` 守卫，实际只跑一次）：仅当最后一条是 `assistant` 且 `isPartial=true` 且 `content` 非空时触发；`accumulatedAnswer` ← partial 内容、`streamingMessageId` ← partial 行 id、`chunkCount = 0`；`_streamState` ← `StreamState.Error(partial=true, retryable=true, partialAnswer=内容, lastQuestion=originalQuestion)` |
+| **教训** | 1) **ViewModel 内存状态 ≠ Room 持久状态**：进程死亡清空前者、保留后者，两者不一致时必须从后者重建前者——否则 UI 依赖的内存状态丢失，即使数据还在也"看不见"。2) 重建不是只恢复"显示状态"，还要恢复**驱动后续操作的累加器/句柄**（`accumulatedAnswer`/`streamingMessageId`），否则续写/重生成会撞脏状态。3) 杀进程恢复是"数据落库 + 重开重建"两段式，`is_partial` 是连接两段的线索 |
+| **影响文件** | `ChatViewModel.kt`（新增 `restorePartialStateIfAny`，在 Room collect 中调用） |

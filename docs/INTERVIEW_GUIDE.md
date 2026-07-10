@@ -1055,7 +1055,7 @@ ActivityResultContracts.GetContent（系统文件选择器）
 
 ## 第 9 章 Bug 实战复盘——面试讲故事的弹药库
 
-> **面试中"遇到过什么困难/难题"几乎必问。** 不要说"没遇到"或"就是查文档"。要讲**具体现象 → 根因分析 → 解决方案 → 学到什么**。下面挑本项目最经典、最能体现深度的几个 Bug，每个都是现成的故事。完整 17 个 Bug 见 `BUGFIX_LOG.md`。
+> **面试中"遇到过什么困难/难题"几乎必问。** 不要说"没遇到"或"就是查文档"。要讲**具体现象 → 根因分析 → 解决方案 → 学到什么**。下面挑本项目最经典、最能体现深度的几个 Bug，每个都是现成的故事。完整 19 个 Bug 见 `BUGFIX_LOG.md`。
 
 ### 9.1 🔥 FK 约束崩溃——先存消息还是先存会话（P0）
 
@@ -1169,6 +1169,30 @@ val appSettings by lazy { settingsRepository.settings.stateIn(...) }
 
 **讲故事的话术**：
 > "用户可输入的 URL 字段，**try/catch 边界要覆盖所有可能抛非受检异常的调用**，不能只裹'看起来会失败'的那行。OkHttp 的 `url()` 解析先于网络请求。协程里非受检异常不被 catch 会冒泡崩进程。"
+
+### 9.8 🔥 杀进程后"继续生成"按钮消失——内存状态 vs 持久状态（P1）
+
+**现象**：流式回答中途直接关掉 App，重开后消息还在（partial 已落盘），但底部的"继续生成/重新生成"横幅不再出现。
+
+**根因**（体现"内存状态 vs 持久状态"的深度）：`_streamState`、`accumulatedAnswer`、`streamingMessageId` 都是 **ViewModel 内存状态**，进程被杀即清零。但 partial 内容每 5 个 chunk 已写进 Room（`is_partial=true`）。`ChatViewModel.init` 只把 Room 消息灌进 `_messages`，**没从残留的 partial 消息重建 `_streamState`**，所以停在 `Idle`，而横幅只在 `Error + retryable` 时渲染 → 看不见。
+
+更关键的是：`continueGeneration()` 依赖 `accumulatedAnswer`/`streamingMessageId` **跨调用存活**（后端续写只发 delta，客户端在内存拼 `partial + 续写`）。所以重建时不能只设状态，还得把这两个累加器一起从 Room 灌回来——否则点继续会丢前半段、点重生成会删错行。
+
+**修复**：新增 `restorePartialStateIfAny()`，重开后若最后一条是 `is_partial` 的非空 assistant 消息，就把 `accumulatedAnswer`/`streamingMessageId`/`_streamState` 三个一起从这条消息重建（`Idle` 守卫，只跑一次）。
+
+**讲故事的话术**：
+> "这是'数据没丢但功能丢了'的典型——ViewModel 的内存状态被进程死亡清零了，Room 里的 partial 内容还在。很多人只想到'恢复显示'，但续写功能依赖两个内存累加器跨调用存活，不一起灌回来，点继续就会丢前半段、点重生成会删错行。这让我理解了**内存状态和持久状态必须能相互重建**，`is_partial` 就是连接两段的线索。"
+
+### 9.9 🔥 出错后按钮点了没反应——恢复字段漏填（P1）
+
+**现象**：流式出错（400/连接断）且**没收到正文**时，弹出"Generation interrupted"横幅，按钮一直能点，但点下去错误原样复现，像按钮坏了。
+
+**根因**：`handleSseEvent()` 的**非 partial 分支**构造 `StreamState.Error` 时**漏传 `lastQuestion`**，取了默认空串。而 `regenerate()`/`continueGeneration()` 重发读的是 `Error` 数据类里的 `lastQuestion` 快照字段（不是 ViewModel 的类字段）→ `sendMessage("")` → 后端请求体 `messages.content` 为空 → 回 `400 missing messages.content` → 同一错误横幅再弹 → 死循环，按钮表现为"失效"。
+
+**修复**：两处构造非 partial `Error` 的地方（`handleSseEvent` + `handleStreamException` 的非 partial 分支）都补上 `lastQuestion = lastQuestion`（类字段此刻仍持有正确问题）。
+
+**讲故事的话术**：
+> "`StreamState.Error` 里的 `lastQuestion` 是'恢复用快照'，**每一条进入 Error 的路径都必须填**，漏一条就漏一种场景的恢复能力。还有个易错点：类字段 `lastQuestion`（实时值）和 Error 数据类里的 `lastQuestion`（进 Error 时的快照）是两份东西，恢复逻辑读哪个决定 bug 有没有。调试'按钮没反应'：先确认回调有没有被调，再看它依赖的状态字段是不是空——`state.lastQuestion == ""` 就是破案线索。"
 
 ---
 
