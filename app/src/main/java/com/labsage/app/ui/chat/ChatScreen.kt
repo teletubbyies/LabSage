@@ -1,10 +1,13 @@
 package com.labsage.app.ui.chat
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.*
+import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -31,6 +35,7 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.core.content.ContextCompat
 import com.labsage.app.LabSageApplication
 import com.labsage.app.domain.model.QuickAction
 import com.labsage.app.domain.model.StreamState
@@ -40,7 +45,11 @@ import dev.jeziellago.compose.markdowntext.MarkdownText
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun ChatScreen(conversationId: String, onBack: () -> Unit) {
+fun ChatScreen(
+    conversationId: String,
+    targetMessageId: Long? = null,
+    onBack: () -> Unit
+) {
     val context = LocalContext.current
     val app = context.applicationContext as LabSageApplication
     val viewModel: ChatViewModel = viewModel(key = conversationId, factory = app.chatViewModelFactory(conversationId))
@@ -68,6 +77,29 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val isStreaming by remember { derivedStateOf { streamState is StreamState.Streaming } }
+    var consumedTargetMessageId by remember(conversationId) { mutableStateOf<Long?>(null) }
+    val hasPendingMessageTarget = targetMessageId != null &&
+        consumedTargetMessageId != targetMessageId
+
+    // Ask at the moment the feature becomes relevant, not on cold app launch.
+    var notificationPermissionRequested by rememberSaveable { mutableStateOf(false) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+    LaunchedEffect(isStreaming) {
+        if (
+            isStreaming &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !notificationPermissionRequested &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionRequested = true
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     val ext = LocalExtendedColors.current
     val scheme = MaterialTheme.colorScheme
@@ -92,11 +124,24 @@ fun ChatScreen(conversationId: String, onBack: () -> Unit) {
 
     // Auto-scroll: animate on new messages, snap on content updates (faster)
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+        if (messages.isNotEmpty() && !hasPendingMessageTarget) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
     }
     // Snap scroll on streaming content updates — avoid per-chunk animation jank
     LaunchedEffect(messages.lastOrNull()?.content) {
         if (isStreaming && messages.isNotEmpty()) listState.scrollToItem(messages.size - 1)
+    }
+    // Notification navigation waits for Room's first emission, then positions the
+    // exact persisted assistant message instead of merely opening the conversation.
+    LaunchedEffect(targetMessageId, messages) {
+        val target = targetMessageId ?: return@LaunchedEffect
+        if (consumedTargetMessageId == target) return@LaunchedEffect
+        val targetIndex = messages.indexOfFirst { it.id == target }
+        if (targetIndex >= 0) {
+            listState.scrollToItem(targetIndex)
+            consumedTargetMessageId = target
+        }
     }
 
     var showTools by remember { mutableStateOf(false) }

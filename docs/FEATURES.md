@@ -350,3 +350,87 @@ UI 下拉存到 DataStore；后端当前按固定函数构造模型（`OpenAIFor
 - `app/src/main/java/com/labsage/app/ui/settings/SettingsScreen.kt`（新增）
 - `app/src/main/java/com/labsage/app/MainActivity.kt`（主题驱动 + 设置路由）
 - `app/src/main/java/com/labsage/app/ui/conversation/ConversationListScreen.kt`（设置入口齿轮）
+
+---
+
+## 五、长回答完成通知（Android Notification）
+
+### 功能概述
+
+当 SSE 长回答正常生成完成后，应用发布一条带正文摘要的系统通知；点击通知会打开对应会话，并精确滚动到该条 assistant 消息。短回答不通知，避免频繁打扰。
+
+| 属性 | 值 |
+|------|-----|
+| 通知渠道 | `long_response_completed`，`IMPORTANCE_DEFAULT` |
+| 长回答阈值 | 300 个非空白字符 |
+| 摘要长度 | 最多 180 字符，清理常见 Markdown 标记 |
+| 定位参数 | `conversationId + messageId` |
+| Android 13+ | 动态申请 `POST_NOTIFICATIONS` |
+
+### 完成事件与通知时序
+
+```text
+SseEvent.Done
+  → finalizeAssistantMessage(messageId, finalAnswer)  // 先完成 Room 落库
+  → ResponseNotificationManager.notifyResponseCompleted(...)
+    → 长度策略过滤 + 生成纯文本摘要
+    → PendingIntent(MainActivity, conversationId, messageId)
+    → NotificationManagerCompat.notify(...)
+```
+
+必须先落库再通知。否则用户在通知发布后立即点击时，目标 `messageId` 可能尚未出现在 Room Flow 中，界面无法定位。
+
+### 通知渠道与权限
+
+- `LabSageApplication.onCreate()` 在 API 26+ 创建渠道。渠道 ID 一旦发布应保持稳定；渠道重要性后续由用户在系统设置中控制，应用不能强行覆盖。
+- API 33+ 需要运行时权限 `POST_NOTIFICATIONS`。`ChatScreen` 在用户真正开始生成时请求，而不是 App 冷启动时突兀弹窗。
+- 发布前再次检查权限，并捕获权限检查与 `notify()` 之间可能发生撤权造成的 `SecurityException`。通知失败不能影响消息落库和 `StreamState.Completed`。
+
+### 点击通知后的精确定位
+
+通知的 `PendingIntent` 带有自定义 action 和两个 extra：
+
+```text
+ACTION_OPEN_RESPONSE
+  conversation_id = <会话 ID>
+  message_id       = <Room 消息主键>
+```
+
+`MainActivity` 同时覆盖两条入口：
+
+- **冷启动**：`onCreate()` 解析初始 Intent。
+- **Activity 已存在**：`FLAG_ACTIVITY_CLEAR_TOP | FLAG_ACTIVITY_SINGLE_TOP` 让点击进入 `onNewIntent()`。
+
+解析结果被映射到可选路由 `chat/{conversationId}?messageId={messageId}`。`ChatScreen` 等待 Room 首次发射完整消息列表，找到目标消息索引后调用 `LazyListState.scrollToItem(index)`。等待期间会暂停原有的“新列表自动滚到底部”逻辑，避免两个滚动 Effect 竞争。
+
+### 架构决策
+
+- **通知策略与 Android API 分离**：`ResponseNotificationContent` 是纯 Kotlin，负责阈值和摘要，可直接做 JVM 单元测试；`ResponseNotificationManager` 只负责渠道、权限、Intent 和发布。
+- **使用 Room 主键定位**：不用“滚到会话底部”近似代替。即使目标回答后面已经出现新消息，仍能回到准确位置。
+- **通知为 best-effort 副作用**：权限关闭或系统拒绝通知时静默跳过，不回滚已完成的回答。
+
+### 验证
+
+- `ResponseNotificationContentTest` 覆盖阈值、Markdown 清理、摘要截断。
+- `./gradlew testDebugUnitTest assembleDebug` 通过。
+
+### 影响文件
+
+- `app/src/main/java/com/labsage/app/notification/ResponseNotificationContent.kt`（新增）
+- `app/src/main/java/com/labsage/app/notification/ResponseNotificationManager.kt`（新增）
+- `app/src/main/java/com/labsage/app/LabSageApplication.kt`（创建渠道、注入通知管理器）
+- `app/src/main/java/com/labsage/app/ui/chat/ChatViewModel.kt`（回答落库后发布完成通知）
+- `app/src/main/java/com/labsage/app/MainActivity.kt`（冷/热启动 Intent 与消息路由）
+- `app/src/main/java/com/labsage/app/ui/chat/ChatScreen.kt`（权限请求、目标消息滚动）
+- `app/src/main/AndroidManifest.xml`（声明通知权限）
+- `app/src/main/res/drawable/ic_notification.xml`（通知小图标）
+- `app/src/test/java/com/labsage/app/notification/ResponseNotificationContentTest.kt`（新增）
+
+### 面试考点
+
+- NotificationChannel 为什么必须在 API 26+ 创建？渠道 ID、重要性由谁控制？
+- `PendingIntent.FLAG_IMMUTABLE` 与 `FLAG_UPDATE_CURRENT` 分别解决什么问题？
+- Android 13 的 `POST_NOTIFICATIONS` 与清单权限、运行时权限是什么关系？
+- `onCreate()` 与 `onNewIntent()` 为什么都要处理通知入口？`singleTop` 的行为是什么？
+- 为什么导航参数必须同时带 `conversationId` 和 `messageId`？
+- Compose 中多个 `LaunchedEffect` 同时控制同一个 `LazyListState` 会有什么竞态？本功能如何规避？

@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Android 13+ runtime permission for long-response completion alerts -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Voice input via SpeechRecognizer (direct API records audio on-device) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 

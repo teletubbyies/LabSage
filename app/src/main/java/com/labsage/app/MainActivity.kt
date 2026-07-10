@@ -1,12 +1,17 @@
 package com.labsage.app
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
@@ -15,27 +20,60 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.labsage.app.domain.model.ThemeMode
+import com.labsage.app.notification.ResponseNotificationManager
 import com.labsage.app.ui.chat.ChatScreen
 import com.labsage.app.ui.conversation.ConversationListScreen
 import com.labsage.app.ui.settings.SettingsScreen
 import com.labsage.app.ui.theme.LabSageTheme
 
 class MainActivity : ComponentActivity() {
+    private var notificationDestination by mutableStateOf<NotificationDestination?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        notificationDestination = intent.notificationDestination()
         enableEdgeToEdge()
         setContent {
-            LabSageRoot()
+            LabSageRoot(
+                notificationDestination = notificationDestination,
+                onNotificationDestinationConsumed = { notificationDestination = null }
+            )
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        notificationDestination = intent.notificationDestination()
     }
 }
 
 object NavRoutes {
     const val CONVERSATION_LIST = "conversation_list"
-    const val CHAT = "chat/{conversationId}"
+    const val CHAT = "chat/{conversationId}?messageId={messageId}"
     const val SETTINGS = "settings"
 
-    fun chatRoute(conversationId: String) = "chat/$conversationId"
+    fun chatRoute(conversationId: String, messageId: Long? = null): String = buildString {
+        append("chat/")
+        append(Uri.encode(conversationId))
+        messageId?.let { append("?messageId=$it") }
+    }
+}
+
+data class NotificationDestination(
+    val conversationId: String,
+    val messageId: Long
+)
+
+private fun Intent?.notificationDestination(): NotificationDestination? {
+    if (this?.action != ResponseNotificationManager.ACTION_OPEN_RESPONSE) return null
+    val conversationId = getStringExtra(ResponseNotificationManager.EXTRA_CONVERSATION_ID)
+        ?.takeIf { it.isNotBlank() }
+        ?: return null
+    val messageId = getLongExtra(ResponseNotificationManager.EXTRA_MESSAGE_ID, -1L)
+        .takeIf { it > 0 }
+        ?: return null
+    return NotificationDestination(conversationId, messageId)
 }
 
 /**
@@ -44,7 +82,10 @@ object NavRoutes {
  * Settings recomposes the whole tree.
  */
 @Composable
-fun LabSageRoot() {
+fun LabSageRoot(
+    notificationDestination: NotificationDestination? = null,
+    onNotificationDestinationConsumed: () -> Unit = {}
+) {
     val app = LocalContext.current.applicationContext as LabSageApplication
     val settings by app.appSettings.collectAsStateWithLifecycle()
     val systemDark = isSystemInDarkTheme()
@@ -54,13 +95,27 @@ fun LabSageRoot() {
         ThemeMode.DARK -> true
     }
     LabSageTheme(darkTheme = darkTheme) {
-        LabSageNavGraph()
+        LabSageNavGraph(notificationDestination, onNotificationDestinationConsumed)
     }
 }
 
 @Composable
-fun LabSageNavGraph() {
+fun LabSageNavGraph(
+    notificationDestination: NotificationDestination? = null,
+    onNotificationDestinationConsumed: () -> Unit = {}
+) {
     val navController = rememberNavController()
+
+    LaunchedEffect(notificationDestination) {
+        val destination = notificationDestination ?: return@LaunchedEffect
+        navController.navigate(
+            NavRoutes.chatRoute(destination.conversationId, destination.messageId)
+        ) {
+            popUpTo(NavRoutes.CONVERSATION_LIST) { inclusive = false }
+            launchSingleTop = true
+        }
+        onNotificationDestinationConsumed()
+    }
 
     NavHost(
         navController = navController, // control navigation
@@ -83,12 +138,20 @@ fun LabSageNavGraph() {
         composable(
             route = NavRoutes.CHAT,
             arguments = listOf(
-                navArgument("conversationId") { type = NavType.StringType }
+                navArgument("conversationId") { type = NavType.StringType },
+                navArgument("messageId") {
+                    type = NavType.LongType
+                    defaultValue = -1L
+                }
             )
         ) { backStackEntry ->
             val conversationId = backStackEntry.arguments?.getString("conversationId") ?: return@composable
+            val targetMessageId = backStackEntry.arguments
+                ?.getLong("messageId")
+                ?.takeIf { it > 0 }
             ChatScreen(
                 conversationId = conversationId,
+                targetMessageId = targetMessageId,
                 onBack = { navController.popBackStack() }
             )
         }

@@ -12,6 +12,7 @@ import com.labsage.app.data.remote.SseDataSource
 import com.labsage.app.data.repository.ChatRepository
 import com.labsage.app.data.repository.SettingsRepository
 import com.labsage.app.domain.model.AppSettings
+import com.labsage.app.notification.ResponseNotificationManager
 import com.labsage.app.ui.chat.ChatViewModel
 import com.labsage.app.ui.conversation.ConversationListViewModel
 import kotlinx.coroutines.CoroutineScope
@@ -46,6 +47,11 @@ class LabSageApplication : Application() {
     companion object {
         /** Default backend URL (Android emulator → host localhost). */
         const val DEFAULT_BASE_URL = AppSettings.DEFAULT_BASE_URL
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        responseNotificationManager.createChannel()
     }
 
     // ============================================================
@@ -171,6 +177,10 @@ class LabSageApplication : Application() {
         )
     }
 
+    val responseNotificationManager: ResponseNotificationManager by lazy {
+        ResponseNotificationManager(this)
+    }
+
     // ============================================================
     // ViewModel factories
     // ============================================================
@@ -180,7 +190,12 @@ class LabSageApplication : Application() {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 if (modelClass.isAssignableFrom(ChatViewModel::class.java)) {
-                    return ChatViewModel(repository, settingsRepository, conversationId) as T
+                    return ChatViewModel(
+                        repository,
+                        settingsRepository,
+                        responseNotificationManager,
+                        conversationId
+                    ) as T
                 }
                 throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
             }

@@ -11,6 +11,7 @@ import com.labsage.app.data.repository.SettingsRepository
 import com.labsage.app.domain.model.StreamState
 import com.labsage.app.domain.model.ToolCallStatus
 import com.labsage.app.domain.model.ToolCallUi
+import com.labsage.app.notification.ResponseNotificationManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
@@ -30,6 +31,7 @@ import kotlinx.coroutines.launch
 class ChatViewModel(
     private val repository: ChatRepository,
     private val settingsRepository: SettingsRepository,
+    private val responseNotificationManager: ResponseNotificationManager,
     private val conversationId: String
 ) : ViewModel() {
 
@@ -306,9 +308,17 @@ class ChatViewModel(
 
             is SseEvent.Done -> {
                 val finalAnswer = accumulatedAnswer.toString()
-                streamingMessageId?.let { id ->
+                val completedMessageId = streamingMessageId
+                completedMessageId?.let { id ->
                     // Flush final content to Room (covers unbatch remainder)
                     repository.finalizeAssistantMessage(id, finalAnswer, currentRoute)
+                    // Notify only after Room contains the final answer, so a tap can
+                    // always resolve the target message immediately.
+                    responseNotificationManager.notifyResponseCompleted(
+                        conversationId = conversationId,
+                        messageId = id,
+                        answer = finalAnswer
+                    )
                 }
                 streamingMessageId = null
                 _streamState.value = StreamState.Completed(
