@@ -148,6 +148,7 @@
 | 15 | 设置页导致启动崩溃（DataStore NPE） | P0 | 生命周期 | ✅ 已修复 |
 | 16 | 测试连接输入非法 URL 崩溃 | P1 | 异常未捕获 | ✅ 已修复 |
 | 17 | 工具卡片成功也显示"中断" | P1 | 解析错误 | ✅ 已修复 |
+| 18 | 重新生成/继续生成按钮失效 | P1 | 状态丢失 | ✅ 已修复 |
 
 ---
 
@@ -282,3 +283,17 @@
 | **修复** | start 行解析时跳过前导 `#N ` token：若 `开始调用` 后的串以 `#` 开头，先 `substringAfter(" ")` 去掉 `#N`，再取 name。这样 start 存 `query_nvidia_gpu_usage`、complete 也存同名，FIFO 配对命中 → COMPLETED |
 | **教训** | 文本协议解析别凭"第一个 token 是 name"的假设，要对照真实 wire 格式（`#N` 这类前缀很常见）；start/complete 两行格式不对称（一个带序号一个不带）时，配对键的提取必须在两侧产出同一值。调试这类问题最快是直接 grep 后端落盘的 trace 日志核对，而不是反复跑 App |
 | **影响文件** | `ChatViewModel.kt`（`applyToolTrace` start 分支名解析） |
+
+---
+
+### 18. 出错后"重新生成/继续生成"按钮失效 —— 非 partial 错误未携带 `lastQuestion`
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | 流式响应出错（400 / 连接中断）且**未收到任何正文**时，弹出"Generation interrupted"横幅（含"重新生成"+"继续生成"两个按钮）。横幅正常显示、按钮也一直可点，但点下去错误立刻原样复现，表现得像按钮"不可用/没反应"——截图里那个 `400 missing messages.content` 正是按钮点出来的 |
+| **根因** | `ChatViewModel.handleSseEvent()` 的**非 partial 分支**构造 `StreamState.Error` 时只传了 `message` + `retryable`，**漏传 `lastQuestion`**，于是它取默认值 `""`。而 `regenerate()` / `continueGeneration()` 重发时读的是 `state.lastQuestion`（Error 数据类里的快照字段，**不是** ViewModel 的类字段）：`regenerate()` → `sendMessage(state.lastQuestion)` = `sendMessage("")`；`continueGeneration()` → `continueStreamMessage(..., state.lastQuestion, state.partialAnswer)`。空 question 发出去 → 后端请求体里 `messages.content` 为空 → 回 `400 missing messages.content` → 同一错误横幅再弹一次 → 死循环，按钮表现为"失效" |
+| **与 #14 的区别** | #14 是**后端** `go-openai` 的 `json:"content,omitempty"` 把 assistant tool_call 消息的 `content` 字段从请求体删掉，DeepSeek 不容忍而 400；本条是**前端**自己发了空 `question` 导致请求体 `messages.content` 缺失。**同一个 400 报文文案，根因在完全不同的层**。#14 已在后端用 `deepSeekContentFixModel` 装饰器修掉；本条说明：即便后端正确，前端在恢复路径上重发空字符串仍会再触发同样的 400 |
+| **触发条件** | 任何"在收到首个 `message` chunk 之前就收到 `error` 事件 / 抛异常"的场景：后端直接拒绝（鉴权、参数错误）、连接建立即断、`onFailure`（HTTP 非 2xx）。partial 分支（已收到正文后中断）本来就传了 `lastQuestion`，不受影响 |
+| **修复** | 两处构造非 partial `StreamState.Error` 的地方都补上 `lastQuestion = lastQuestion`（类字段此刻仍持有正确问题——`doSend` 在开流前就赋值，error 处理不重置它）：① `handleSseEvent` 的 `else` 分支；② `handleStreamException` 的 `else` 分支（后者 `retryable=false` 不显示横幅，但 `regenerate()` 不检查 retryable，为一致性一并补上） |
+| **教训** | 1) `StreamState.Error` 里的 `lastQuestion` 是"恢复用快照"，**每一条进入 Error 的路径都必须填**，否则任何依赖它恢复的操作都会拿到空值——状态对象的"恢复字段"必须与所有进入路径一一对应，漏一条路径就漏一种场景的恢复能力。2) 类字段 `lastQuestion`（实时值）和 Error 数据类里的 `lastQuestion`（进入 Error 时的快照）是两份东西，恢复逻辑读哪个决定 bug 有没有——读快照更安全（不被后续状态污染），但前提是快照在进入 Error 时被正确写入。3) 调试"按钮点了没反应"：先确认回调有没有被调（这里被调了），再看回调依赖的状态字段是不是空——`state.lastQuestion == ""` 是破案线索 |
+| **影响文件** | `ChatViewModel.kt`（`handleSseEvent` 非 partial 分支、`handleStreamException` 非 partial 分支） |

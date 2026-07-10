@@ -359,9 +359,14 @@ class ChatViewModel(
                         repository.deleteMessage(id)
                     }
                     streamingMessageId = null
+                    // CRITICAL: carry lastQuestion even for non-partial errors.
+                    // regenerate()/continueGeneration() resubmit from state.lastQuestion;
+                    // if it's "" here, they resend an empty question → backend 400
+                    // "missing messages.content" → the buttons look dead (infinite loop).
                     _streamState.value = StreamState.Error(
                         message = event.message,
-                        retryable = event.retryable
+                        retryable = event.retryable,
+                        lastQuestion = lastQuestion
                     )
                 }
             }
@@ -384,7 +389,8 @@ class ChatViewModel(
         } else {
             _streamState.value = StreamState.Error(
                 message = e.message ?: "Send failed",
-                retryable = false
+                retryable = false,
+                lastQuestion = lastQuestion
             )
         }
     }
