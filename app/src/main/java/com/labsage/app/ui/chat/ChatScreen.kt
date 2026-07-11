@@ -279,14 +279,23 @@ fun ChatScreen(
                 ) {
                     items(messages, key = { it.id }) { msg ->
                         var showMenu by remember { mutableStateOf(false) }
-                        Box {
+                        // combinedClickable lives on the outer Box, NOT on MessageBubble's modifier.
+                        // Passing a Modifier built with fresh lambdas each recomposition
+                        // (onClick = {}, onLongClick = { showMenu = true }) makes MessageBubble's
+                        // `modifier` param always "changed", which defeats Compose's skip — every
+                        // visible bubble recomposes on each streaming chunk (measured 8/8). Keeping
+                        // the click handler here leaves MessageBubble with a constant Modifier, so
+                        // historical bubbles are skipped and only the streaming one recomposes
+                        // (measured 8/8 → 1/8). See app/src/androidTest/.../ui/perf/.
+                        Box(
+                            modifier = Modifier.combinedClickable(
+                                onClick = {},
+                                onLongClick = { showMenu = true }
+                            )
+                        ) {
                             MessageBubble(
                                 role = msg.role,
                                 content = msg.content,
-                                modifier = Modifier.combinedClickable(
-                                    onClick = {},
-                                    onLongClick = { showMenu = true }
-                                ),
                                 isStreaming = msg.isPartial && isStreaming,
                                 traceLines = if (msg.isPartial && isStreaming && msg.role == "assistant") {
                                     traceLines

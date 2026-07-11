@@ -88,6 +88,10 @@ dependencies {
     // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
+    // espresso 3.7.0 is required on Android 16 (API 36+): 3.6.x's input injector reflectively
+    // calls InputManager.getInstance(), which was removed. Compose's createComposeRule() routes
+    // app-idle sync through Espresso.onIdle(), and ui-test-junit4 transitively pins an older
+    // espresso — so we force 3.7.0 explicitly here.
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(composeBom)
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
