@@ -300,7 +300,15 @@ deleted_at          nullable tombstone
 - SSE 不按每个 token 写服务端数据库。
 - 正常结束和中断状态一致、有测试。
 
-完成状态：`pending`
+完成状态：`completed`
+
+完成记录：
+
+- 用户确认采用“首条聊天原子创建不存在会话”契约；计划契约 commit：`048cf98 feat(F05): define first-message conversation creation`。
+- 独立终审：`PASS`（`review_f05_gate4`；前三轮 FAIL 的新会话入口、Continue 并发、重启证据与测试隔离问题均已修复）。
+- Go 后端 commit：`6ada196 feat(F05): persist idempotent chat turns`。
+- 验证：相关 HTTP/Store/Memory 测试连续 10 轮通过，race 检测、`go vet`、`gofmt` 与 `git diff --check` 通过。
+- 覆盖 JWT 归属、原子创建与回滚、幂等重放、completed/partial/failed/continue、结构化 SSE `done`、取消上下文终态落库、数据库关闭/重开后冷内存恢复及不完整轮次过滤。
 
 ### F06：Android Room 全局 ID 迁移
 
