@@ -16,10 +16,15 @@ interface MessageDao {
         "SELECT messages.* FROM messages " +
             "INNER JOIN conversations ON conversations.id = messages.conversation_id " +
             "WHERE messages.conversation_id = :conversationId " +
-            "AND conversations.owner_user_id = :userId AND messages.is_deleted = 0 " +
+            "AND conversations.owner_user_id = :userId " +
+            "AND conversations.owner_server_key = :serverKey AND messages.is_deleted = 0 " +
             "ORDER BY messages.timestamp ASC, messages.id ASC"
     )
-    fun getMessagesByConversation(userId: String, conversationId: String): Flow<List<MessageEntity>>
+    fun getMessagesByConversation(
+        userId: String,
+        conversationId: String,
+        serverKey: String = "server-a"
+    ): Flow<List<MessageEntity>>
 
     @Insert
     suspend fun insert(message: MessageEntity)
@@ -52,9 +57,10 @@ interface MessageDao {
         "SELECT messages.* FROM messages INNER JOIN conversations " +
             "ON conversations.id = messages.conversation_id " +
             "WHERE conversations.owner_user_id = :userId AND messages.sync_version = 0 " +
+            "AND conversations.owner_server_key = :serverKey " +
             "AND messages.is_deleted = 0 ORDER BY messages.timestamp ASC, messages.id ASC"
     )
-    suspend fun getLocalOnlyForImport(userId: String): List<MessageEntity>
+    suspend fun getLocalOnlyForImport(userId: String, serverKey: String): List<MessageEntity>
 
     @Transaction
     suspend fun upsertOwned(userId: String, message: MessageEntity) {
@@ -280,6 +286,14 @@ interface MessageDao {
 
     @Query("SELECT id FROM messages WHERE conversation_id = :conversationId AND sync_version > 0")
     suspend fun getSyncedIds(conversationId: String): List<String>
+
+    @Query(
+        "SELECT EXISTS(SELECT 1 FROM messages INNER JOIN conversations " +
+            "ON conversations.id = messages.conversation_id " +
+            "WHERE conversations.owner_user_id = :userId " +
+            "AND messages.conversation_id = :conversationId AND messages.sync_version > 0)"
+    )
+    suspend fun hasSyncedRows(userId: String, conversationId: String): Boolean
 
     @Query("DELETE FROM messages WHERE conversation_id = :conversationId AND sync_version > 0 AND id IN (:ids)")
     suspend fun deleteSyncedByIds(conversationId: String, ids: List<String>)

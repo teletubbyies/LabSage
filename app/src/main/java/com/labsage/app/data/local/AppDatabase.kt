@@ -23,7 +23,7 @@ import java.util.UUID
         ConversationEntity::class,
         MessageEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -160,6 +160,17 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL(
                     "CREATE INDEX IF NOT EXISTS index_conversations_owner_user_id " +
                         "ON conversations(owner_user_id)"
+                )
+            }
+        }
+
+        /** v4 → v5: namespace cached history by backend as well as authenticated user. */
+        val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE conversations ADD COLUMN owner_server_key TEXT")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_conversations_owner_server_key " +
+                        "ON conversations(owner_server_key)"
                 )
             }
         }

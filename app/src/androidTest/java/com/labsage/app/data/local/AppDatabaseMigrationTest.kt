@@ -69,9 +69,13 @@ class AppDatabaseMigrationTest {
         helper.close()
 
         val room = Room.databaseBuilder(context, AppDatabase::class.java, databaseName)
-            .addMigrations(AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
+            .addMigrations(
+                AppDatabase.MIGRATION_2_3,
+                AppDatabase.MIGRATION_3_4,
+                AppDatabase.MIGRATION_4_5
+            )
             .build()
-        val db = room.openHelper.writableDatabase // Opens, migrates, and validates Room's v3 schema.
+        val db = room.openHelper.writableDatabase // Opens, migrates, and validates latest schema.
 
         val conversationId = db.query(
             "SELECT id, title, is_pinned, version, sync_version, is_deleted, owner_user_id " +

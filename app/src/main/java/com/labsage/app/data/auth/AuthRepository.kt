@@ -104,6 +104,25 @@ class AuthRepository(
     fun sessionSnapshot(): AuthSession? = sessionStore.load()
 
     /**
+     * Commits identity-bound local state without allowing login/logout/backend
+     * mutation to interleave between validation and the final write.
+     */
+    suspend fun <T> withStableSessionBinding(
+        userId: String,
+        serverBaseUrl: String,
+        block: suspend () -> T
+    ): T = sessionMutationMutex.withLock {
+        check(sessionStore.load()?.matchesBinding(userId, serverBaseUrl) == true) {
+            "Authentication changed before bound commit"
+        }
+        val result = block()
+        check(sessionStore.load()?.matchesBinding(userId, serverBaseUrl) == true) {
+            "Authentication changed during bound commit"
+        }
+        result
+    }
+
+    /**
      * Returns a usable token only while the same user remains bound to the same
      * backend. Refresh is allowed inside that identity, but a concurrent account
      * or backend switch invalidates the operation instead of lending it new creds.

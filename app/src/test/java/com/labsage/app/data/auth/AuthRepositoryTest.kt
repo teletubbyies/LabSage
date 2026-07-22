@@ -3,6 +3,8 @@ package com.labsage.app.data.auth
 import com.labsage.app.data.remote.ApiResponse
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.test.runTest
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.assertEquals
@@ -143,6 +145,31 @@ class AuthRepositoryTest {
 
         assertNull(store.load())
         assertEquals(AuthenticationState.Unauthenticated, repository.state.value)
+    }
+
+    @Test
+    fun `bound local commit cannot interleave with logout`() = runTest {
+        val store = InMemoryAuthSessionStore(session(expiresAt = 9_999))
+        val repository = repository(FakeAuthApi(), store)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+
+        val commit = async {
+            repository.withStableSessionBinding("user-1", baseUrl) {
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+        entered.await()
+        val logout = async { repository.logout() }
+        yield()
+
+        assertFalse(logout.isCompleted)
+        assertEquals("user-1", store.load()?.user?.id)
+        release.complete(Unit)
+        commit.await()
+        logout.await()
+        assertNull(store.load())
     }
 
     private fun session(

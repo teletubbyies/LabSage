@@ -13,7 +13,7 @@ import androidx.room.PrimaryKey
  */
 @Entity(
     tableName = "conversations",
-    indices = [Index("owner_user_id")]
+    indices = [Index("owner_user_id"), Index("owner_server_key")]
 )
 data class ConversationEntity(
     @PrimaryKey
@@ -45,5 +45,9 @@ data class ConversationEntity(
 
     /** Authenticated account that owns this cached conversation; null only for unclaimed legacy rows. */
     @ColumnInfo(name = "owner_user_id")
-    val ownerUserId: String? = null
+    val ownerUserId: String? = null,
+
+    /** Backend namespace for this cache row; null only until the v5 claim step. */
+    @ColumnInfo(name = "owner_server_key")
+    val ownerServerKey: String? = null
 )

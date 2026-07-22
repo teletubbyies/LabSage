@@ -14,7 +14,7 @@ fun interface LegacyImportRemoteSource {
 }
 
 fun interface LegacyImportLocalSource {
-    suspend fun snapshot(userId: String): LegacyImportRequest
+    suspend fun snapshot(binding: LegacyImportBinding): LegacyImportRequest
 }
 
 /** Runs the one-time import and records completion only after backend success. */
@@ -29,7 +29,7 @@ class LegacyHistoryImportCoordinator(
     suspend fun ensureImported(binding: LegacyImportBinding) = mutex.withLock {
         check(isBindingCurrent(binding)) { "Authentication changed before legacy import" }
         if (completionStore.isCompleted(binding.userId, binding.serverKey)) return@withLock
-        val snapshot = local.snapshot(binding.userId)
+        val snapshot = local.snapshot(binding)
         val batches = buildList {
             snapshot.conversations.chunked(CONVERSATION_BATCH_SIZE).forEach {
                 add(LegacyImportRequest(conversations = it, messages = emptyList()))

@@ -10,7 +10,9 @@ import com.labsage.app.data.local.entity.ConversationEntity
 import com.labsage.app.data.local.entity.MessageEntity
 import com.labsage.app.data.remote.*
 import com.labsage.app.data.sync.HistoryRemoteSource
+import com.labsage.app.data.sync.HistoryPage
 import com.labsage.app.data.sync.HistorySyncCoordinator
+import com.labsage.app.data.sync.DataStoreHistoryCursorStore
 import com.labsage.app.data.sync.DataStoreLegacyImportCompletionStore
 import com.labsage.app.data.sync.LegacyHistoryImportCoordinator
 import com.labsage.app.data.sync.LegacyImportBinding
@@ -44,6 +46,7 @@ class ChatRepository(
     private val messageDao: MessageDao
 ) {
     private val historySyncStore = RoomHistorySyncStore(database)
+    private val historyCursorStore = DataStoreHistoryCursorStore(app)
     private val legacyImportCoordinator = LegacyHistoryImportCoordinator(
         remote = LegacyImportRemoteSource { binding, request ->
             check(isLegacyImportBindingCurrent(binding))
@@ -62,48 +65,82 @@ class ChatRepository(
             }
             response.data ?: error(response.message)
         },
-        local = LegacyImportLocalSource(historySyncStore::legacyImportSnapshot),
+        local = LegacyImportLocalSource { binding ->
+            historySyncStore.legacyImportSnapshot(binding.userId, binding.serverKey)
+        },
         completionStore = DataStoreLegacyImportCompletionStore(app),
         isBindingCurrent = ::isLegacyImportBindingCurrent
     )
     private val historySyncCoordinator = HistorySyncCoordinator(
         remote = object : HistoryRemoteSource {
-            override suspend fun getConversations(): List<ConversationDto> {
-                val response = app.api.getConversations()
-                return response.data?.items ?: error(response.message)
+            override suspend fun getConversations(
+                userId: String,
+                serverKey: String,
+                updatedAfter: Long?
+            ): HistoryPage<ConversationDto> {
+                val response = withBoundHistoryApi(userId, serverKey) {
+                    getConversations(updatedAfter)
+                }
+                val data = response.data ?: error(response.message)
+                return HistoryPage(data.items, data.nextCursor, data.serverTime)
             }
 
-            override suspend fun getMessages(conversationId: String): List<MessageDto> {
-                val response = app.api.getMessages(conversationId)
-                return response.data?.items ?: error(response.message)
+            override suspend fun getMessages(
+                userId: String,
+                serverKey: String,
+                conversationId: String,
+                updatedAfter: Long?
+            ): HistoryPage<MessageDto> {
+                val response = withBoundHistoryApi(userId, serverKey) {
+                    getMessages(conversationId, updatedAfter)
+                }
+                val data = response.data ?: error(response.message)
+                return HistoryPage(data.items, data.nextCursor, data.serverTime)
             }
         },
-        local = historySyncStore
+        local = historySyncStore,
+        cursors = historyCursorStore,
+        isBindingCurrent = { userId, serverKey ->
+            isLegacyImportBindingCurrent(LegacyImportBinding(userId, serverKey))
+        },
+        commitWithStableBinding = { userId, serverKey, block ->
+            app.authRepository.withStableSessionBinding(userId, serverKey, block)
+        }
     )
     // ============================================================
     // Local queries (observable Room Flows)
     // ============================================================
 
-    fun getAllConversations(): Flow<List<ConversationEntity>> =
-        conversationDao.getAllConversations(currentUserId())
+    fun getAllConversations(): Flow<List<ConversationEntity>> {
+        val binding = currentLegacyImportBinding()
+        return conversationDao.getAllConversations(binding.userId, binding.serverKey)
+    }
 
     /** Title-substring search across conversations (pinned-first ordering). */
-    fun searchConversations(query: String): Flow<List<ConversationEntity>> =
-        conversationDao.searchConversations(currentUserId(), query)
+    fun searchConversations(query: String): Flow<List<ConversationEntity>> {
+        val binding = currentLegacyImportBinding()
+        return conversationDao.searchConversations(binding.userId, query, binding.serverKey)
+    }
 
-    fun getMessages(conversationId: String): Flow<List<MessageEntity>> =
-        messageDao.getMessagesByConversation(currentUserId(), conversationId)
+    fun getMessages(conversationId: String): Flow<List<MessageEntity>> {
+        val binding = currentLegacyImportBinding()
+        return messageDao.getMessagesByConversation(
+            binding.userId,
+            conversationId,
+            binding.serverKey
+        )
+    }
 
     suspend fun syncConversations(): Result<Unit> = runCatching {
         val binding = currentLegacyImportBinding()
         legacyImportCoordinator.ensureImported(binding)
-        historySyncCoordinator.syncConversations(binding.userId)
+        historySyncCoordinator.syncConversations(binding.userId, binding.serverKey)
     }
 
     suspend fun syncMessages(conversationId: String): Result<Unit> = runCatching {
         val binding = currentLegacyImportBinding()
         legacyImportCoordinator.ensureImported(binding)
-        historySyncCoordinator.syncMessages(binding.userId, conversationId)
+        historySyncCoordinator.syncMessages(binding.userId, binding.serverKey, conversationId)
     }
 
     // ============================================================
@@ -351,11 +388,18 @@ class ChatRepository(
     }
 
     suspend fun upsertConversation(conversationId: String, title: String) {
-        val userId = currentUserId()
-        val existing = conversationDao.getById(userId, conversationId)
+        val binding = currentLegacyImportBinding()
+        val userId = binding.userId
+        val existing = conversationDao.getById(userId, conversationId, binding.serverKey)
         if (existing != null) {
             // Use UPDATE to avoid FK CASCADE from REPLACE
-            conversationDao.updateMeta(userId, conversationId, title, System.currentTimeMillis())
+            conversationDao.updateMeta(
+                userId,
+                conversationId,
+                title,
+                System.currentTimeMillis(),
+                binding.serverKey
+            )
         } else {
             // Fresh insert — IGNORE conflict (safe, no cascade risk)
             val inserted = conversationDao.insert(
@@ -364,27 +408,40 @@ class ChatRepository(
                     title = title,
                     createdAt = System.currentTimeMillis(),
                     updatedAt = System.currentTimeMillis(),
-                    ownerUserId = userId
+                    ownerUserId = userId,
+                    ownerServerKey = binding.serverKey
                 )
             )
-            check(inserted != -1L || conversationDao.getById(userId, conversationId) != null) {
-                "Conversation ID belongs to a different local account"
+            check(inserted != -1L || conversationDao.getById(
+                userId,
+                conversationId,
+                binding.serverKey
+            ) != null) {
+                "Conversation ID belongs to a different local account or backend"
             }
         }
     }
 
     suspend fun deleteConversation(conversationId: String) {
-        conversationDao.deleteById(currentUserId(), conversationId)
+        val binding = currentLegacyImportBinding()
+        conversationDao.deleteById(binding.userId, conversationId, binding.serverKey)
     }
 
     /** Pin or unpin a conversation (pinned ones sort to the top). */
     suspend fun setConversationPinned(conversationId: String, pinned: Boolean) {
-        conversationDao.setPinned(currentUserId(), conversationId, pinned)
+        val binding = currentLegacyImportBinding()
+        conversationDao.setPinned(binding.userId, conversationId, pinned, binding.serverKey)
     }
 
     /** Rename a conversation without changing its updated_at (no reordering). */
     suspend fun renameConversation(conversationId: String, newTitle: String) {
-        conversationDao.updateTitle(currentUserId(), conversationId, newTitle.trim())
+        val binding = currentLegacyImportBinding()
+        conversationDao.updateTitle(
+            binding.userId,
+            conversationId,
+            newTitle.trim(),
+            binding.serverKey
+        )
     }
 
     suspend fun deleteMessage(messageId: String) {
@@ -429,6 +486,26 @@ class ChatRepository(
             }
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    private suspend fun <T> withBoundHistoryApi(
+        userId: String,
+        serverKey: String,
+        request: suspend LabSageApi.() -> T
+    ): T {
+        var session = app.authRepository.sessionForBoundOperation(userId, serverKey)
+            ?: error("Authentication changed during history synchronization")
+        return try {
+            app.legacyImportApiFor(session).request()
+        } catch (error: HttpException) {
+            if (error.code() != 401) throw error
+            session = app.authRepository.sessionForBoundOperation(
+                userId,
+                serverKey,
+                forceRefresh = true
+            ) ?: error("Authentication changed during history synchronization")
+            app.legacyImportApiFor(session).request()
         }
     }
 

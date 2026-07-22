@@ -157,7 +157,9 @@ data class SseDonePayload(
 )
 
 data class ConversationListData(
-    @SerializedName("items") val items: List<ConversationDto> = emptyList()
+    @SerializedName("items") val items: List<ConversationDto> = emptyList(),
+    @SerializedName("nextCursor") val nextCursor: Long,
+    @SerializedName("serverTime") val serverTime: Long
 )
 
 data class ConversationDto(
@@ -171,7 +173,9 @@ data class ConversationDto(
 )
 
 data class MessageListData(
-    @SerializedName("items") val items: List<MessageDto> = emptyList()
+    @SerializedName("items") val items: List<MessageDto> = emptyList(),
+    @SerializedName("nextCursor") val nextCursor: Long,
+    @SerializedName("serverTime") val serverTime: Long
 )
 
 data class MessageDto(

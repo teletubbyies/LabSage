@@ -17,10 +17,15 @@ interface LabSageApi {
     suspend fun chat(@Body request: ChatRequest): ApiResponse<ChatData>
 
     @GET("api/conversations")
-    suspend fun getConversations(): ApiResponse<ConversationListData>
+    suspend fun getConversations(
+        @Query("updatedAfter") updatedAfter: Long? = null
+    ): ApiResponse<ConversationListData>
 
     @GET("api/conversations/{id}/messages")
-    suspend fun getMessages(@Path("id") conversationId: String): ApiResponse<MessageListData>
+    suspend fun getMessages(
+        @Path("id") conversationId: String,
+        @Query("updatedAfter") updatedAfter: Long? = null
+    ): ApiResponse<MessageListData>
 
     @POST("api/sync/import")
     suspend fun importLegacyHistory(@Body request: LegacyImportRequest): ApiResponse<LegacyImportData>

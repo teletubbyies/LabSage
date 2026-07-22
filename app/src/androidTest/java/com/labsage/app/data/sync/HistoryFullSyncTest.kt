@@ -10,6 +10,9 @@ import com.labsage.app.data.local.entity.MessageEntity
 import com.labsage.app.data.remote.ConversationDto
 import com.labsage.app.data.remote.MessageDto
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -165,21 +168,41 @@ class HistoryFullSyncTest {
         var messageCalls = 0
         val coordinator = HistorySyncCoordinator(
             remote = object : HistoryRemoteSource {
-                override suspend fun getConversations(): List<ConversationDto> {
+                override suspend fun getConversations(
+                    userId: String,
+                    serverKey: String,
+                    updatedAfter: Long?
+                ): HistoryPage<ConversationDto> {
                     conversationCalls++
-                    return listOf(remoteConversation("deep-link-conversation", syncVersion = 3))
+                    assertEquals(null, updatedAfter)
+                    return HistoryPage(
+                        listOf(remoteConversation("deep-link-conversation", syncVersion = 3)),
+                        nextCursor = 3,
+                        serverTime = 100
+                    )
                 }
 
-                override suspend fun getMessages(conversationId: String): List<MessageDto> {
+                override suspend fun getMessages(
+                    userId: String,
+                    serverKey: String,
+                    conversationId: String,
+                    updatedAfter: Long?
+                ): HistoryPage<MessageDto> {
                     messageCalls++
                     assertEquals("deep-link-conversation", conversationId)
-                    return listOf(remoteMessage("deep-link-message", conversationId, syncVersion = 4))
+                    assertEquals(null, updatedAfter)
+                    return HistoryPage(
+                        listOf(remoteMessage("deep-link-message", conversationId, syncVersion = 4)),
+                        nextCursor = 4,
+                        serverTime = 101
+                    )
                 }
             },
-            local = store
+            local = store,
+            cursors = InMemoryHistoryCursorStore()
         )
 
-        coordinator.syncMessages("user-a", "deep-link-conversation")
+        coordinator.syncMessages("user-a", "server-a", "deep-link-conversation")
 
         assertEquals(1, conversationCalls)
         assertEquals(1, messageCalls)
@@ -193,6 +216,332 @@ class HistoryFullSyncTest {
             database.messageDao()
                 .getMessagesByConversation("user-a", "deep-link-conversation")
                 .first().single().id
+        )
+    }
+
+    @Test
+    fun conversationCursorAdvancesAfterRoomAndReplayIsIdempotent() = runBlocking {
+        val requests = mutableListOf<Long?>()
+        val cursorStore = InMemoryHistoryCursorStore()
+        var call = 0
+        val coordinator = HistorySyncCoordinator(
+            remote = object : HistoryRemoteSource {
+                override suspend fun getConversations(
+                    userId: String,
+                    serverKey: String,
+                    updatedAfter: Long?
+                ): HistoryPage<ConversationDto> {
+                    requests += updatedAfter
+                    call++
+                    return when (call) {
+                        1 -> HistoryPage(
+                            listOf(remoteConversation("first", syncVersion = 3)), 3, 100
+                        )
+                        2 -> HistoryPage(
+                            listOf(remoteConversation("second", syncVersion = 5)), 5, 101
+                        )
+                        else -> HistoryPage(emptyList(), 5, 102)
+                    }
+                }
+
+                override suspend fun getMessages(
+                    userId: String,
+                    serverKey: String,
+                    conversationId: String,
+                    updatedAfter: Long?
+                ) = error("not used")
+            },
+            local = store,
+            cursors = cursorStore
+        )
+
+        coordinator.syncConversations("user-a", "server-a")
+        coordinator.syncConversations("user-a", "server-a")
+        coordinator.syncConversations("user-a", "server-a")
+
+        assertEquals(listOf(null, 3L, 5L), requests)
+        assertEquals(5L, cursorStore.getConversationsCursor("user-a", "server-a"))
+        assertEquals(
+            setOf("first", "second"),
+            database.conversationDao().getAllConversations("user-a").first().map { it.id }.toSet()
+        )
+    }
+
+    @Test
+    fun failedRoomMergeDoesNotAdvanceConversationCursor() = runBlocking {
+        val requests = mutableListOf<Long?>()
+        val cursorStore = InMemoryHistoryCursorStore()
+        database.conversationDao().insert(conversation("foreign-id", "user-b", syncVersion = 8))
+        var call = 0
+        val coordinator = HistorySyncCoordinator(
+            remote = object : HistoryRemoteSource {
+                override suspend fun getConversations(
+                    userId: String,
+                    serverKey: String,
+                    updatedAfter: Long?
+                ): HistoryPage<ConversationDto> {
+                    requests += updatedAfter
+                    call++
+                    return if (call == 1) {
+                        HistoryPage(listOf(remoteConversation("owned", syncVersion = 3)), 3, 100)
+                    } else {
+                        HistoryPage(listOf(remoteConversation("foreign-id", syncVersion = 9)), 9, 101)
+                    }
+                }
+
+                override suspend fun getMessages(
+                    userId: String,
+                    serverKey: String,
+                    conversationId: String,
+                    updatedAfter: Long?
+                ) = error("not used")
+            },
+            local = store,
+            cursors = cursorStore
+        )
+
+        coordinator.syncConversations("user-a", "server-a")
+        assertTrue(runCatching {
+            coordinator.syncConversations("user-a", "server-a")
+        }.isFailure)
+        assertTrue(runCatching {
+            coordinator.syncConversations("user-a", "server-a")
+        }.isFailure)
+
+        assertEquals(listOf(null, 3L, 3L), requests)
+        assertEquals(3L, cursorStore.getConversationsCursor("user-a", "server-a"))
+    }
+
+    @Test
+    fun switchingServersWithSameUserForcesConversationAndMessageFullSync() = runBlocking {
+        val conversationRequests = mutableListOf<Pair<String, Long?>>()
+        val messageRequests = mutableListOf<Pair<String, Long?>>()
+        val cursorStore = InMemoryHistoryCursorStore()
+        val coordinator = HistorySyncCoordinator(
+            remote = object : HistoryRemoteSource {
+                override suspend fun getConversations(
+                    userId: String,
+                    serverKey: String,
+                    updatedAfter: Long?
+                ): HistoryPage<ConversationDto> {
+                    conversationRequests += serverKey to updatedAfter
+                    return if (serverKey == "server-a") {
+                        HistoryPage(
+                            listOf(
+                                remoteConversation("shared", 99).copy(title = "from-a"),
+                                remoteConversation("a-only", 100)
+                            ),
+                            100,
+                            1_000
+                        )
+                    } else {
+                        HistoryPage(
+                            listOf(
+                                remoteConversation("shared", 199).copy(title = "from-b"),
+                                remoteConversation("b-only", 200)
+                            ),
+                            200,
+                            2_000
+                        )
+                    }
+                }
+
+                override suspend fun getMessages(
+                    userId: String,
+                    serverKey: String,
+                    conversationId: String,
+                    updatedAfter: Long?
+                ): HistoryPage<MessageDto> {
+                    messageRequests += serverKey to updatedAfter
+                    return if (serverKey == "server-a") {
+                        HistoryPage(
+                            listOf(remoteMessage("message-a", conversationId, 101)),
+                            101,
+                            1_001
+                        )
+                    } else {
+                        HistoryPage(
+                            listOf(remoteMessage("message-b", conversationId, 201)),
+                            201,
+                            2_001
+                        )
+                    }
+                }
+            },
+            local = store,
+            cursors = cursorStore
+        )
+
+        for (server in listOf("server-a", "server-b", "server-a")) {
+            coordinator.syncConversations("same-user", server)
+            assertTrue(
+                database.messageDao().getMessagesByConversation("same-user", "shared")
+                    .first().isEmpty()
+            )
+            coordinator.syncMessages("same-user", server, "shared")
+        }
+
+        assertEquals(
+            listOf("server-a" to null, "server-b" to null, "server-a" to null),
+            conversationRequests
+        )
+        assertEquals(
+            listOf("server-a" to null, "server-b" to null, "server-a" to null),
+            messageRequests
+        )
+        val conversations = database.conversationDao().getAllConversations("same-user").first()
+        assertEquals(setOf("shared", "a-only"), conversations.map { it.id }.toSet())
+        assertEquals("from-a", conversations.single { it.id == "shared" }.title)
+        assertEquals(
+            listOf("message-a"),
+            database.messageDao().getMessagesByConversation("same-user", "shared")
+                .first().map { it.id }
+        )
+    }
+
+    @Test
+    fun serverSwitchFailureInvalidatesVisibilityButSameServerFailureKeepsOfflineCache() =
+        runBlocking {
+            val cursorStore = InMemoryHistoryCursorStore()
+            database.conversationDao().insert(conversation("cached-a", "same-user", 10))
+            cursorStore.setConversationsCursor("same-user", "server-a", 10)
+            cursorStore.setMessagesCursor("same-user", "server-a", "cached-a", 11)
+
+            fun failingCoordinator(server: String) = HistorySyncCoordinator(
+                remote = object : HistoryRemoteSource {
+                    override suspend fun getConversations(
+                        userId: String,
+                        serverKey: String,
+                        updatedAfter: Long?
+                    ): HistoryPage<ConversationDto> = error("$server offline")
+
+                    override suspend fun getMessages(
+                        userId: String,
+                        serverKey: String,
+                        conversationId: String,
+                        updatedAfter: Long?
+                    ): HistoryPage<MessageDto> = error("not used")
+                },
+                local = store,
+                cursors = cursorStore
+            )
+
+            assertTrue(runCatching {
+                failingCoordinator("server-b").syncConversations("same-user", "server-b")
+            }.isFailure)
+            assertFalse(cursorStore.observeConversationsCacheBound("same-user", "server-b").first())
+            assertFalse(cursorStore.observeConversationsCacheBound("same-user", "server-a").first())
+            assertFalse(
+                cursorStore.observeMessagesCacheBound("same-user", "server-b", "cached-a").first()
+            )
+            assertEquals(
+                listOf("cached-a"),
+                database.conversationDao().getAllConversations("same-user").first().map { it.id }
+            )
+
+            cursorStore.setConversationsCursor("same-user", "server-a", 10)
+            assertTrue(runCatching {
+                failingCoordinator("server-a").syncConversations("same-user", "server-a")
+            }.isFailure)
+            assertTrue(cursorStore.observeConversationsCacheBound("same-user", "server-a").first())
+        }
+
+    @Test
+    fun cursorWriteFailureLeavesCacheUnboundAndForcesFullOnPreviousServer() = runBlocking {
+        val requests = mutableListOf<Pair<String, Long?>>()
+        val cursorStore = InMemoryHistoryCursorStore()
+        val coordinator = HistorySyncCoordinator(
+            remote = object : HistoryRemoteSource {
+                override suspend fun getConversations(
+                    userId: String,
+                    serverKey: String,
+                    updatedAfter: Long?
+                ): HistoryPage<ConversationDto> {
+                    requests += serverKey to updatedAfter
+                    val version = if (serverKey == "server-a") 10L else 20L
+                    return HistoryPage(
+                        listOf(remoteConversation("shared", version)),
+                        version,
+                        version * 100
+                    )
+                }
+
+                override suspend fun getMessages(
+                    userId: String,
+                    serverKey: String,
+                    conversationId: String,
+                    updatedAfter: Long?
+                ): HistoryPage<MessageDto> = error("not used")
+            },
+            local = store,
+            cursors = cursorStore
+        )
+
+        coordinator.syncConversations("same-user", "server-a")
+        cursorStore.failNextConversationSet = true
+        assertTrue(runCatching {
+            coordinator.syncConversations("same-user", "server-b")
+        }.isFailure)
+        assertFalse(cursorStore.isConversationsCacheBound("same-user", "server-a"))
+        assertFalse(cursorStore.isConversationsCacheBound("same-user", "server-b"))
+        coordinator.syncConversations("same-user", "server-a")
+
+        assertEquals(
+            listOf("server-a" to null, "server-b" to null, "server-a" to null),
+            requests
+        )
+    }
+
+    @Test
+    fun localOnlyRowsAreNeitherImportedNorShownOnAnotherServer() = runBlocking {
+        database.conversationDao().insert(
+            ConversationEntity(
+                id = "local-a",
+                title = "private draft",
+                ownerUserId = "same-user",
+                ownerServerKey = "server-a",
+                syncVersion = 0
+            )
+        )
+
+        val serverBSnapshot = store.legacyImportSnapshot("same-user", "server-b")
+        assertTrue(serverBSnapshot.conversations.isEmpty())
+        assertTrue(serverBSnapshot.messages.isEmpty())
+
+        store.syncConversations(
+            userId = "same-user",
+            serverKey = "server-b",
+            remote = emptyList(),
+            replaceSyncedCache = true
+        )
+        assertTrue(
+            database.conversationDao().getAllConversations("same-user", "server-b")
+                .first().isEmpty()
+        )
+        assertTrue(
+            database.conversationDao().getAllConversations("same-user", "server-a")
+                .first().isEmpty()
+        )
+    }
+
+    @Test
+    fun upgradedUnscopedRowsBecomeVisibleOfflineAfterLocalClaim() = runBlocking {
+        database.conversationDao().insert(
+            ConversationEntity(
+                id = "upgraded-cache",
+                title = "offline history",
+                ownerUserId = "same-user",
+                ownerServerKey = null,
+                syncVersion = 7
+            )
+        )
+
+        store.claimLegacyConversations("same-user", "original-server")
+
+        assertEquals(
+            listOf("upgraded-cache"),
+            database.conversationDao()
+                .getAllConversations("same-user", "original-server").first().map { it.id }
         )
     }
 
@@ -632,6 +981,7 @@ class HistoryFullSyncTest {
         id = id,
         title = id,
         ownerUserId = owner,
+        ownerServerKey = owner?.let { "server-a" },
         syncVersion = syncVersion
     )
 
@@ -657,4 +1007,67 @@ class HistoryFullSyncTest {
         createdAt = 110,
         updatedAt = 120
     )
+}
+
+private class InMemoryHistoryCursorStore : HistoryCursorStore {
+    private val values = mutableMapOf<String, Long>()
+    private val bindings = MutableStateFlow<Map<String, String>>(emptyMap())
+    var failNextConversationSet = false
+
+    override suspend fun invalidateCacheBinding(userId: String) {
+        bindings.value = bindings.value - "c:$userId" - "mg:$userId"
+    }
+
+    override fun observeConversationsCacheBound(
+        userId: String,
+        serverKey: String
+    ): Flow<Boolean> = bindings.map { it["c:$userId"] == serverKey }
+
+    override suspend fun isConversationsCacheBound(userId: String, serverKey: String): Boolean =
+        bindings.value["c:$userId"] == serverKey
+
+    override suspend fun getConversationsCursor(userId: String, serverKey: String): Long? =
+        values["c:$serverKey:$userId"]
+
+    override suspend fun setConversationsCursor(userId: String, serverKey: String, cursor: Long) {
+        if (failNextConversationSet) {
+            failNextConversationSet = false
+            error("cursor write failed")
+        }
+        bindings.value = bindings.value + ("c:$userId" to serverKey)
+        values["c:$serverKey:$userId"] = cursor
+    }
+
+    override suspend fun isMessagesCacheBound(
+        userId: String,
+        serverKey: String,
+        conversationId: String
+    ): Boolean = bindings.value["mg:$userId"] == serverKey &&
+        bindings.value["m:$userId:$conversationId"] == serverKey
+
+    override fun observeMessagesCacheBound(
+        userId: String,
+        serverKey: String,
+        conversationId: String
+    ): Flow<Boolean> = bindings.map {
+        it["mg:$userId"] == serverKey && it["m:$userId:$conversationId"] == serverKey
+    }
+
+    override suspend fun getMessagesCursor(
+        userId: String,
+        serverKey: String,
+        conversationId: String
+    ): Long? = values["m:$serverKey:$userId:$conversationId"]
+
+    override suspend fun setMessagesCursor(
+        userId: String,
+        serverKey: String,
+        conversationId: String,
+        cursor: Long
+    ) {
+        bindings.value = bindings.value +
+            ("mg:$userId" to serverKey) +
+            ("m:$userId:$conversationId" to serverKey)
+        values["m:$serverKey:$userId:$conversationId"] = cursor
+    }
 }

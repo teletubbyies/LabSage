@@ -30,7 +30,8 @@ class MessageTerminalStateTest {
                 ConversationEntity(
                     id = "conversation-uuid",
                     title = "Conversation",
-                    ownerUserId = "test-user"
+                    ownerUserId = "test-user",
+                    ownerServerKey = "server-a"
                 )
             )
         }
