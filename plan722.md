@@ -282,7 +282,9 @@ deleted_at          nullable tombstone
 范围：
 
 - 扩展 `/api/chat` 与 `/api/chat_stream` 请求：conversation ID、client message ID、client request ID。
-- 后端校验会话归属。
+- 后端校验会话归属；已存在会话必须属于当前 JWT 用户。
+- 若客户端提交的 conversation UUID 不存在，则在首次聊天事务中原子创建归属当前用户的会话，再预留用户/助手消息；默认标题取规范化后的首条问题前 80 个字符。
+- 若同一 conversation UUID 已属于其他用户或已软删除，统一返回 404，不允许接管或恢复。
 - 聊天业务流内保存用户消息，不要求 Android 额外上传一次。
 - 正常完成后保存助手完整消息。
 - 中断时保存 partial/failed 状态和已产生内容。
@@ -293,6 +295,7 @@ deleted_at          nullable tombstone
 验收：
 
 - 同一 client request 重试不会产生重复用户消息或助手消息。
+- 全新会话的首条消息可直接完成“创建会话 + 写入首轮消息”，不依赖 legacy import 或额外创建 API。
 - 服务重启后历史可查询，模型最近上下文可重建。
 - SSE 不按每个 token 写服务端数据库。
 - 正常结束和中断状态一致、有测试。
@@ -438,6 +441,8 @@ POST   /api/sync/import
 ```
 
 ### 6.3 Chat stream request
+
+`/api/chat` 与 `/api/chat_stream` 共享会话首次写入语义：不存在的 conversation UUID 由当前 JWT 用户在首轮事务中创建；已存在的外用户或软删除 UUID 返回 404。
 
 ```json
 {
