@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 /**
  * ViewModel for the chat screen.
@@ -111,7 +112,10 @@ class ChatViewModel(
     // ============================================================
 
     private var streamingJob: Job? = null
-    private var streamingMessageId: Long? = null
+    private var streamingMessageId: String? = null
+    private var currentUserMessageId: String? = null
+    private var currentClientRequestId: String? = null
+    private var currentClientCreatedAt: Long = 0
     private val accumulatedAnswer = StringBuilder()
     private val accumulatedTraces = mutableListOf<String>()
     private var currentToolStats = mutableMapOf<String, Int>()
@@ -170,7 +174,16 @@ class ChatViewModel(
             // CRITICAL(checked): create conversation BEFORE inserting messages (Foreign Key constraint in db)
             repository.upsertConversation(conversationId, deriveTitle(question))
             // Now persist user message
-            repository.saveUserMessage(conversationId, question)
+            currentUserMessageId = UUID.randomUUID().toString()
+            currentClientRequestId = UUID.randomUUID().toString()
+            currentClientCreatedAt = System.currentTimeMillis()
+            repository.saveUserMessage(
+                conversationId = conversationId,
+                content = question,
+                messageId = checkNotNull(currentUserMessageId),
+                clientRequestId = checkNotNull(currentClientRequestId),
+                clientCreatedAt = currentClientCreatedAt
+            )
 
             // Reset stream state
             _streamState.value = StreamState.Streaming
@@ -190,7 +203,13 @@ class ChatViewModel(
             // data from network io, including chat data stored in db, and tool chain usage stored in memory.
             // streamingJob is under viewModelScope not under before coroutine
             streamingJob = viewModelScope.launch {
-                repository.sendStreamMessage(conversationId, question)
+                repository.sendStreamMessage(
+                    sessionId = conversationId,
+                    question = question,
+                    clientMessageId = checkNotNull(currentUserMessageId),
+                    clientRequestId = checkNotNull(currentClientRequestId),
+                    clientCreatedAt = currentClientCreatedAt
+                )
                     .catch { e -> handleStreamException(e) }
                     .collect { event -> handleSseEvent(event) }
             }
@@ -206,11 +225,19 @@ class ChatViewModel(
         if (state !is StreamState.Error || !state.retryable) return
 
         viewModelScope.launch {
+            val userMessageId = currentUserMessageId ?: return@launch
+            val requestId = currentClientRequestId ?: return@launch
             _streamState.value = StreamState.Streaming
+            streamingMessageId?.let { repository.markAssistantStreaming(it) }
 
             streamingJob = viewModelScope.launch {
                 repository.continueStreamMessage(
-                    conversationId, state.lastQuestion, state.partialAnswer
+                    sessionId = conversationId,
+                    question = state.lastQuestion,
+                    partialAnswer = state.partialAnswer,
+                    clientMessageId = userMessageId,
+                    clientRequestId = requestId,
+                    clientCreatedAt = currentClientCreatedAt
                 )
                     .catch { e -> handleStreamException(e) }
                     .collect { event -> handleSseEvent(event) }
@@ -277,7 +304,8 @@ class ChatViewModel(
                         conversationId = conversationId,
                         content = accumulatedAnswer.toString(),
                         isPartial = true,
-                        originalQuestion = lastQuestion
+                        originalQuestion = lastQuestion,
+                        clientRequestId = currentClientRequestId
                     )
                 } else if (chunkCount % 5 == 0) {
                     // Batch: write to Room every 5th chunk (reduces disk I/O
@@ -317,25 +345,63 @@ class ChatViewModel(
             }
 
             is SseEvent.Done -> {
+                if (
+                    event.conversationId != conversationId ||
+                    event.userMessageId != currentUserMessageId
+                ) {
+                    persistTerminalFailure(
+                        message = "Stream completion metadata does not match this request",
+                        retryable = true
+                    )
+                    return
+                }
                 val finalAnswer = accumulatedAnswer.toString()
-                val completedMessageId = streamingMessageId
-                completedMessageId?.let { id ->
-                    // Flush final content to Room (covers unbatch remainder)
-                    repository.finalizeAssistantMessage(id, finalAnswer, currentRoute)
-                    // Notify only after Room contains the final answer, so a tap can
-                    // always resolve the target message immediately.
-                    responseNotificationManager.notifyResponseCompleted(
-                        conversationId = conversationId,
-                        messageId = id,
-                        answer = finalAnswer
+                val localMessageId = streamingMessageId
+                val terminalMessageId = if (localMessageId != null) {
+                    if (event.status == "completed") {
+                        repository.finalizeAssistantMessage(localMessageId, finalAnswer, currentRoute)
+                    } else {
+                        repository.updateAssistantMessage(
+                            localMessageId,
+                            finalAnswer,
+                            isPartial = event.status == "partial"
+                        )
+                    }
+                    repository.adoptServerMessageIdentity(localMessageId, event)
+                    event.assistantMessageId
+                } else {
+                    repository.saveTerminalAssistantMessage(
+                        event = event,
+                        question = lastQuestion,
+                        clientRequestId = currentClientRequestId.orEmpty()
                     )
                 }
-                streamingMessageId = null
-                _streamState.value = StreamState.Completed(
-                    fullAnswer = finalAnswer,
-                    route = currentRoute,
-                    toolStats = currentToolStats
-                )
+                streamingMessageId = terminalMessageId
+                if (event.status == "completed") {
+                    responseNotificationManager.notifyResponseCompleted(
+                        conversationId = conversationId,
+                        messageId = terminalMessageId,
+                        answer = finalAnswer
+                    )
+                    streamingMessageId = null
+                    _streamState.value = StreamState.Completed(
+                        fullAnswer = finalAnswer,
+                        route = currentRoute,
+                        toolStats = currentToolStats
+                    )
+                } else {
+                    _streamState.value = StreamState.Error(
+                        message = if (event.status == "partial") {
+                            "Response generation was interrupted"
+                        } else {
+                            "Response generation failed"
+                        },
+                        partial = event.status == "partial",
+                        retryable = true,
+                        partialAnswer = finalAnswer,
+                        lastQuestion = lastQuestion
+                    )
+                }
                 // Any tool still CALLING when the stream ends did not finish.
                 if (_toolCalls.value.any { it.status == ToolCallStatus.CALLING }) {
                     _toolCalls.value = _toolCalls.value.map {
@@ -346,75 +412,68 @@ class ChatViewModel(
                 _activeRoute.value = currentRoute
                 _traceLines.value = emptyList()
                 // Show completion indicator briefly
-                _justCompleted.value = true
-                kotlinx.coroutines.delay(2500)
-                _justCompleted.value = false
+                if (event.status == "completed") {
+                    _justCompleted.value = true
+                    kotlinx.coroutines.delay(2500)
+                    _justCompleted.value = false
+                }
             }
 
             is SseEvent.Error -> {
-                val partial = accumulatedAnswer.toString()
-                if (event.partial && partial.isNotEmpty()) {
-                    streamingMessageId?.let { id ->
-                        repository.updateAssistantMessage(id, partial, isPartial = true)
-                    }
-                    _streamState.value = StreamState.Error(
-                        message = event.message,
-                        partial = true,
-                        retryable = event.retryable,
-                        partialAnswer = partial,
-                        lastQuestion = lastQuestion
-                    )
-                } else {
-                    streamingMessageId?.let { id ->
-                        repository.deleteMessage(id)
-                    }
-                    streamingMessageId = null
-                    // CRITICAL: carry lastQuestion even for non-partial errors.
-                    // regenerate()/continueGeneration() resubmit from state.lastQuestion;
-                    // if it's "" here, they resend an empty question → backend 400
-                    // "missing messages.content" → the buttons look dead (infinite loop).
-                    _streamState.value = StreamState.Error(
-                        message = event.message,
-                        retryable = event.retryable,
-                        lastQuestion = lastQuestion
-                    )
-                }
+                persistTerminalFailure(event.message, event.retryable)
             }
         }
     }
 
     private suspend fun handleStreamException(e: Throwable) {
-        val partial = accumulatedAnswer.toString()
-        if (partial.isNotEmpty()) {
-            streamingMessageId?.let { id ->
-                repository.updateAssistantMessage(id, partial, isPartial = true)
-            }
-            _streamState.value = StreamState.Error(
-                message = e.message ?: "Connection lost",
-                partial = true,
-                retryable = true,
-                partialAnswer = partial,
-                lastQuestion = lastQuestion
-            )
-        } else {
-            _streamState.value = StreamState.Error(
-                message = e.message ?: "Send failed",
-                retryable = false,
-                lastQuestion = lastQuestion
-            )
-        }
+        persistTerminalFailure(
+            message = e.message ?: if (accumulatedAnswer.isNotEmpty()) "Connection lost" else "Send failed",
+            retryable = true
+        )
+    }
+
+    /**
+     * Persist every untrusted/incomplete terminal path with one rule: generated
+     * content is partial and resumable; an empty answer is failed. This handles
+     * malformed or mismatched done metadata, SSE error events, and transport loss.
+     */
+    private suspend fun persistTerminalFailure(message: String, retryable: Boolean) {
+        val failure = ChatTerminalFailure.from(accumulatedAnswer.toString())
+        val terminalMessageId = streamingMessageId ?: repository.saveAssistantMessage(
+            conversationId = conversationId,
+            content = failure.content,
+            isPartial = failure.isPartial,
+            originalQuestion = lastQuestion,
+            errorMessage = message,
+            clientRequestId = currentClientRequestId,
+            status = failure.status
+        )
+        streamingMessageId = terminalMessageId
+        repository.markAssistantTerminal(
+            messageId = terminalMessageId,
+            content = failure.content,
+            status = failure.status,
+            errorMessage = message
+        )
+        _streamState.value = StreamState.Error(
+            message = message,
+            partial = failure.isPartial,
+            retryable = retryable,
+            partialAnswer = failure.content,
+            lastQuestion = lastQuestion
+        )
     }
 
     // ============================================================
     // Helpers
     // ============================================================
 
-    private suspend fun deleteMessage(id: Long) {
+    private suspend fun deleteMessage(id: String) {
         repository.deleteMessage(id)
     }
 
     /**
-     * Rebuild in-memory resume state from a persisted partial assistant message.
+     * Rebuild in-memory resume state from the latest persisted partial/failed turn.
      *
      * Called on every Room emission but guarded by [StreamState.Idle], so it
      * effectively runs once — right after the ViewModel is (re)created. Covers
@@ -427,23 +486,38 @@ class ChatViewModel(
      *     the SAME row, instead of overwriting it with the tail only, and
      *   - [regenerate] deletes the right partial row via [streamingMessageId].
      *
-     * Only fires for a non-empty partial assistant message: an empty partial row
-     * cannot be resumed (mirrors the isNotEmpty() guard in the error handlers).
+     * A partial response must contain resumable text. A failed response may be
+     * empty and is restored so the original request can still be retried.
      */
     private fun restorePartialStateIfAny(entities: List<MessageEntity>) {
         if (_streamState.value !is StreamState.Idle) return
-        val last = entities.lastOrNull() ?: return
-        if (last.role != "assistant" || !last.isPartial || last.content.isEmpty()) return
+        val recovered = ChatRecovery.from(entities) ?: return
+        val last = recovered.assistant
         accumulatedAnswer.clear()
         accumulatedAnswer.append(last.content)
         streamingMessageId = last.id
+        currentClientRequestId = last.clientRequestId
+        currentUserMessageId = recovered.user.id
+        currentClientCreatedAt = recovered.user.clientCreatedAt
         chunkCount = 0
+        val recoveredFromProcessDeath = last.status == "streaming"
+        if (recoveredFromProcessDeath) {
+            viewModelScope.launch {
+                repository.markAssistantTerminal(
+                    messageId = last.id,
+                    content = last.content,
+                    status = "partial",
+                    errorMessage = "Generation interrupted when app process stopped"
+                )
+            }
+        }
         _streamState.value = StreamState.Error(
-            partial = true,
+            partial = last.status == "partial" || recoveredFromProcessDeath,
             retryable = true,
             partialAnswer = last.content,
-            lastQuestion = last.originalQuestion ?: "",
-            message = ""  // banner title "生成已中断" already conveys it
+            lastQuestion = last.originalQuestion ?: recovered.user.content,
+            message = last.errorMessage
+                ?: if (recoveredFromProcessDeath) "Generation was interrupted" else ""
         )
     }
 
@@ -649,7 +723,8 @@ class ChatViewModel(
         isPartial = isPartial,
         route = route,
         originalQuestion = originalQuestion,
-        errorMessage = errorMessage
+        errorMessage = errorMessage,
+        status = status
     )
 }
 
@@ -669,14 +744,15 @@ data class SessionContextUi(
 
 @androidx.compose.runtime.Immutable
 data class MessageUiState(
-    val id: Long,
+    val id: String,
     val role: String,
     val content: String,
     val timestamp: Long,
     val isPartial: Boolean = false,
     val route: String? = null,
     val originalQuestion: String? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val status: String = "completed"
 )
 
 sealed class UploadState {

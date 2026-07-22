@@ -19,7 +19,13 @@ data class ChatRequest(
     @SerializedName("Id")
     val id: String,
     @SerializedName("Question")
-    val question: String
+    val question: String,
+    @SerializedName("ClientMessageId")
+    val clientMessageId: String,
+    @SerializedName("ClientRequestId")
+    val clientRequestId: String,
+    @SerializedName("ClientCreatedAt")
+    val clientCreatedAt: Long
 )
 
 /**
@@ -38,6 +44,12 @@ data class ChatStreamRequest(
     val id: String,
     @SerializedName("Question")
     val question: String,
+    @SerializedName("ClientMessageId")
+    val clientMessageId: String,
+    @SerializedName("ClientRequestId")
+    val clientRequestId: String,
+    @SerializedName("ClientCreatedAt")
+    val clientCreatedAt: Long,
     @SerializedName("Continue")
     val continueFlag: Boolean = false,
     @SerializedName("PartialAnswer")
@@ -132,6 +144,16 @@ data class SseErrorPayload(
     val partial: Boolean = false,
     @SerializedName("retryable")
     val retryable: Boolean = true
+)
+
+/** Structured terminal metadata returned by the backend's SSE done event. */
+data class SseDonePayload(
+    @SerializedName("conversationId") val conversationId: String,
+    @SerializedName("userMessageId") val userMessageId: String,
+    @SerializedName("assistantMessageId") val assistantMessageId: String,
+    @SerializedName("status") val status: String,
+    @SerializedName("updatedAt") val updatedAt: Long,
+    @SerializedName("syncVersion") val syncVersion: Long
 )
 
 // ============================================================

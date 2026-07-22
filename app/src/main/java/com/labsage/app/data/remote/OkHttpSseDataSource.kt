@@ -7,6 +7,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.flowOn
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -44,6 +45,7 @@ class OkHttpSseDataSource(
             .build()
 
         val factory = EventSources.createFactory(sseClient)
+        var terminalEventSeen = false
         val eventSource = factory.newEventSource(httpRequest, object : EventSourceListener() {
 
             override fun onOpen(eventSource: EventSource, response: Response) {
@@ -57,6 +59,9 @@ class OkHttpSseDataSource(
                 data: String
             ) {
                 val event = buildEvent(type, data) ?: return
+                if (event is SseEvent.Done || event is SseEvent.Error) {
+                    terminalEventSeen = true
+                }
                 // Filter trace events: forward only structured lifecycle lines used to build
                 // the tool execution panel. Raw queries generate 200+ free-form trace lines;
                 // keeping all of them would overflow the channel (see BUGFIX_LOG #11).
@@ -77,6 +82,14 @@ class OkHttpSseDataSource(
             }
 
             override fun onClosed(eventSource: EventSource) {
+                if (!terminalEventSeen) {
+                    trySend(
+                        SseEvent.Error(
+                            message = "SSE connection closed before a terminal event",
+                            retryable = true
+                        )
+                    )
+                }
                 channel.close()
             }
 
@@ -97,14 +110,15 @@ class OkHttpSseDataSource(
             eventSource.cancel()
         }
     }
-        .buffer(Channel.UNLIMITED)  // prevent data loss with 240+ events on tool queries
+
+        .buffer(Channel.UNLIMITED)  // (key, otherwise terminate output unexpectedly)prevent data loss with 240+ events on tool queries
         .flowOn(Dispatchers.IO)
 
     // ============================================================
     // Event parsing
     // ============================================================
 
-    private fun buildEvent(type: String?, data: String): SseEvent? {
+    internal fun buildEvent(type: String?, data: String): SseEvent? {
         return when (type) {
             "connected" -> {
                 try {
@@ -124,7 +138,27 @@ class OkHttpSseDataSource(
                     null // ignore malformed trace_summary
                 }
             }
-            "done" -> SseEvent.Done
+            "done" -> {
+                try {
+                    val payload = gson.fromJson(data, SseDonePayload::class.java)
+                    require(!payload.conversationId.isNullOrBlank())
+                    require(!payload.userMessageId.isNullOrBlank())
+                    require(!payload.assistantMessageId.isNullOrBlank())
+                    require(payload.status in setOf("completed", "partial", "failed"))
+                    require(payload.updatedAt > 0)
+                    require(payload.syncVersion > 0)
+                    SseEvent.Done(
+                        conversationId = payload.conversationId,
+                        userMessageId = payload.userMessageId,
+                        assistantMessageId = payload.assistantMessageId,
+                        status = payload.status,
+                        updatedAt = payload.updatedAt,
+                        syncVersion = payload.syncVersion
+                    )
+                } catch (_: Exception) {
+                    SseEvent.Error("Malformed stream completion metadata", retryable = true)
+                }
+            }
             "error" -> {
                 try {
                     val payload = gson.fromJson(data, SseErrorPayload::class.java)

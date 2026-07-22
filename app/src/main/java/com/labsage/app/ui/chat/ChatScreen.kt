@@ -53,7 +53,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatScreen(
     conversationId: String,
-    targetMessageId: Long? = null,
+    targetMessageId: String? = null,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -107,7 +107,7 @@ fun ChatScreen(
         }
     }
 
-    var consumedTargetMessageId by remember(conversationId) { mutableStateOf<Long?>(null) }
+    var consumedTargetMessageId by remember(conversationId) { mutableStateOf<String?>(null) }
     val hasPendingMessageTarget = targetMessageId != null &&
         consumedTargetMessageId != targetMessageId
 

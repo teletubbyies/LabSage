@@ -58,25 +58,25 @@ object NavRoutes {
     const val CHAT = "chat/{conversationId}?messageId={messageId}"
     const val SETTINGS = "settings"
 
-    fun chatRoute(conversationId: String, messageId: Long? = null): String = buildString {
+    fun chatRoute(conversationId: String, messageId: String? = null): String = buildString {
         append("chat/")
         append(Uri.encode(conversationId))
-        messageId?.let { append("?messageId=$it") }
+        messageId?.let { append("?messageId=${Uri.encode(it)}") }
     }
 }
 
 data class NotificationDestination(
     val conversationId: String,
-    val messageId: Long
+    val messageId: String
 )
 
-private fun Intent?.notificationDestination(): NotificationDestination? {
+internal fun Intent?.notificationDestination(): NotificationDestination? {
     if (this?.action != ResponseNotificationManager.ACTION_OPEN_RESPONSE) return null
     val conversationId = getStringExtra(ResponseNotificationManager.EXTRA_CONVERSATION_ID)
         ?.takeIf { it.isNotBlank() }
         ?: return null
-    val messageId = getLongExtra(ResponseNotificationManager.EXTRA_MESSAGE_ID, -1L)
-        .takeIf { it > 0 }
+    val messageId = getStringExtra(ResponseNotificationManager.EXTRA_MESSAGE_ID)
+        ?.takeIf { it.isNotBlank() }
         ?: return null
     return NotificationDestination(conversationId, messageId)
 }
@@ -157,15 +157,15 @@ fun LabSageNavGraph(
             arguments = listOf(
                 navArgument("conversationId") { type = NavType.StringType },
                 navArgument("messageId") {
-                    type = NavType.LongType
-                    defaultValue = -1L
+                    type = NavType.StringType
+                    defaultValue = ""
                 }
             )
         ) { backStackEntry ->
             val conversationId = backStackEntry.arguments?.getString("conversationId") ?: return@composable
             val targetMessageId = backStackEntry.arguments
-                ?.getLong("messageId")
-                ?.takeIf { it > 0 }
+                ?.getString("messageId")
+                ?.takeIf { it.isNotBlank() }
             ChatScreen(
                 conversationId = conversationId,
                 targetMessageId = targetMessageId,

@@ -26,5 +26,16 @@ data class ConversationEntity(
 
     /** Pinned conversations sort to the top of the list. */
     @ColumnInfo(name = "is_pinned")
-    val isPinned: Boolean = false
+    val isPinned: Boolean = false,
+
+    /** Optimistic-lock version assigned by the server (0 = legacy/local only). */
+    val version: Long = 0,
+
+    /** Monotonic server sync cursor (0 = not synchronized yet). */
+    @ColumnInfo(name = "sync_version")
+    val syncVersion: Long = 0,
+
+    /** Local tombstone mirrored from the server during sync. */
+    @ColumnInfo(name = "is_deleted")
+    val isDeleted: Boolean = false
 )

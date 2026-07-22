@@ -12,6 +12,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
+import java.util.UUID
 
 /**
  * Single source of truth for all data operations.
@@ -50,8 +51,18 @@ class ChatRepository(
 
     /** Non-streaming (quick mode) chat */
     suspend fun sendQuickMessage(sessionId: String, question: String): Result<ChatData> {
+        val clientMessageId = UUID.randomUUID().toString()
+        val clientRequestId = UUID.randomUUID().toString()
         return try {
-            val response = app.api.chat(ChatRequest(sessionId, question))
+            val response = app.api.chat(
+                ChatRequest(
+                    id = sessionId,
+                    question = question,
+                    clientMessageId = clientMessageId,
+                    clientRequestId = clientRequestId,
+                    clientCreatedAt = System.currentTimeMillis()
+                )
+            )
             if (response.data != null) {
                 Result.success(response.data)
             } else {
@@ -63,9 +74,21 @@ class ChatRepository(
     }
 
     /** SSE streaming chat — returns a Flow of parsed events */
-    fun sendStreamMessage(sessionId: String, question: String): Flow<SseEvent> {
+    fun sendStreamMessage(
+        sessionId: String,
+        question: String,
+        clientMessageId: String,
+        clientRequestId: String,
+        clientCreatedAt: Long
+    ): Flow<SseEvent> {
         return app.sseDataSource.streamChat(
-            ChatStreamRequest(id = sessionId, question = question)
+            ChatStreamRequest(
+                id = sessionId,
+                question = question,
+                clientMessageId = clientMessageId,
+                clientRequestId = clientRequestId,
+                clientCreatedAt = clientCreatedAt
+            )
         )
     }
 
@@ -73,12 +96,18 @@ class ChatRepository(
     fun continueStreamMessage(
         sessionId: String,
         question: String,
-        partialAnswer: String
+        partialAnswer: String,
+        clientMessageId: String,
+        clientRequestId: String,
+        clientCreatedAt: Long
     ): Flow<SseEvent> {
         return app.sseDataSource.streamChat(
             ChatStreamRequest(
                 id = sessionId,
                 question = question,
+                clientMessageId = clientMessageId,
+                clientRequestId = clientRequestId,
+                clientCreatedAt = clientCreatedAt,
                 continueFlag = true,
                 partialAnswer = partialAnswer
             )
@@ -143,14 +172,25 @@ class ChatRepository(
     // Persistence helpers
     // ============================================================
 
-    suspend fun saveUserMessage(conversationId: String, content: String) {
+    suspend fun saveUserMessage(
+        conversationId: String,
+        content: String,
+        messageId: String = UUID.randomUUID().toString(),
+        clientRequestId: String = UUID.randomUUID().toString(),
+        clientCreatedAt: Long = System.currentTimeMillis()
+    ): String {
         messageDao.insert(
             MessageEntity(
+                id = messageId,
                 conversationId = conversationId,
                 role = "user",
-                content = content
+                content = content,
+                status = "completed",
+                clientRequestId = clientRequestId,
+                clientCreatedAt = clientCreatedAt
             )
         )
+        return messageId
     }
 
     /**
@@ -163,29 +203,87 @@ class ChatRepository(
         route: String? = null,
         isPartial: Boolean = false,
         originalQuestion: String? = null,
-        errorMessage: String? = null
-    ): Long {
-        return messageDao.insert(
+        errorMessage: String? = null,
+        clientRequestId: String? = null,
+        status: String = if (isPartial) "streaming" else "completed"
+    ): String {
+        val messageId = UUID.randomUUID().toString()
+        messageDao.insert(
             MessageEntity(
+                id = messageId,
                 conversationId = conversationId,
                 role = "assistant",
                 content = content,
                 route = route,
                 isPartial = isPartial,
                 originalQuestion = originalQuestion,
-                errorMessage = errorMessage
+                errorMessage = errorMessage,
+                status = status,
+                clientRequestId = clientRequestId
             )
         )
+        return messageId
     }
 
     /** Update streaming content in-place (called on each SSE 'message' chunk) */
-    suspend fun updateAssistantMessage(messageId: Long, content: String, isPartial: Boolean) {
+    suspend fun updateAssistantMessage(messageId: String, content: String, isPartial: Boolean) {
         messageDao.updateContent(messageId, content, isPartial)
     }
 
+    suspend fun markAssistantTerminal(
+        messageId: String,
+        content: String,
+        status: String,
+        errorMessage: String?
+    ) {
+        messageDao.markTerminal(
+            messageId = messageId,
+            content = content,
+            status = status,
+            isPartial = status == "partial",
+            errorMessage = errorMessage
+        )
+    }
+
+    suspend fun markAssistantStreaming(messageId: String) {
+        messageDao.markStreaming(messageId)
+    }
+
     /** Mark a streamed message as complete */
-    suspend fun finalizeAssistantMessage(messageId: Long, content: String, route: String?) {
+    suspend fun finalizeAssistantMessage(messageId: String, content: String, route: String?) {
         messageDao.finalizeMessage(messageId, content, route)
+    }
+
+    suspend fun adoptServerMessageIdentity(localId: String, event: SseEvent.Done) {
+        messageDao.adoptServerIdentity(
+            localId = localId,
+            serverId = event.assistantMessageId,
+            status = event.status,
+            syncVersion = event.syncVersion,
+            serverUpdatedAt = event.updatedAt
+        )
+    }
+
+    suspend fun saveTerminalAssistantMessage(
+        event: SseEvent.Done,
+        question: String,
+        clientRequestId: String
+    ): String {
+        messageDao.insert(
+            MessageEntity(
+                id = event.assistantMessageId,
+                conversationId = event.conversationId,
+                role = "assistant",
+                content = "",
+                status = event.status,
+                isPartial = event.status == "partial",
+                originalQuestion = question,
+                clientRequestId = clientRequestId,
+                syncVersion = event.syncVersion,
+                serverUpdatedAt = event.updatedAt
+            )
+        )
+        return event.assistantMessageId
     }
 
     suspend fun upsertConversation(conversationId: String, title: String) {
@@ -220,7 +318,7 @@ class ChatRepository(
         conversationDao.updateTitle(conversationId, newTitle.trim())
     }
 
-    suspend fun deleteMessage(messageId: Long) {
+    suspend fun deleteMessage(messageId: String) {
         messageDao.deleteById(messageId)
     }
 

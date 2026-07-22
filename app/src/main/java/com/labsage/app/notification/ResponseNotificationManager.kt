@@ -32,7 +32,7 @@ class ResponseNotificationManager(private val context: Context) {
 
     fun notifyResponseCompleted(
         conversationId: String,
-        messageId: Long,
+        messageId: String,
         answer: String
     ) {
         if (!ResponseNotificationContent.isLongResponse(answer) || !canPostNotifications()) return

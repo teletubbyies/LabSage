@@ -25,11 +25,11 @@ import androidx.room.PrimaryKey
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index("conversation_id")]
+    indices = [Index("conversation_id"), Index("client_request_id")]
 )
 data class MessageEntity(
-    @PrimaryKey(autoGenerate = true)
-    val id: Long = 0,
+    @PrimaryKey
+    val id: String,
 
     @ColumnInfo(name = "conversation_id")
     val conversationId: String,
@@ -54,5 +54,28 @@ data class MessageEntity(
 
     /** Error details for partial or failed messages */
     @ColumnInfo(name = "error_message")
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+
+    /** pending / streaming / completed / partial / failed */
+    val status: String = if (isPartial) "partial" else "completed",
+
+    /** Stable idempotency key shared by one user/assistant turn. */
+    @ColumnInfo(name = "client_request_id")
+    val clientRequestId: String? = null,
+
+    /** Device timestamp retained for legacy import and conflict diagnostics. */
+    @ColumnInfo(name = "client_created_at")
+    val clientCreatedAt: Long = timestamp,
+
+    /** Monotonic server cursor, 0 while the row exists only locally. */
+    @ColumnInfo(name = "sync_version")
+    val syncVersion: Long = 0,
+
+    /** Server's last update time after a sync or structured SSE done event. */
+    @ColumnInfo(name = "server_updated_at")
+    val serverUpdatedAt: Long? = null,
+
+    /** Local tombstone mirrored from the server during sync. */
+    @ColumnInfo(name = "is_deleted")
+    val isDeleted: Boolean = false
 )

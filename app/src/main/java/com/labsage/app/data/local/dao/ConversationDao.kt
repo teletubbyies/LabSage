@@ -12,11 +12,11 @@ import kotlinx.coroutines.flow.Flow
 interface ConversationDao {
 
     /** All conversations, pinned first then newest first. */
-    @Query("SELECT * FROM conversations ORDER BY is_pinned DESC, updated_at DESC")
+    @Query("SELECT * FROM conversations WHERE is_deleted = 0 ORDER BY is_pinned DESC, updated_at DESC, id DESC")
     fun getAllConversations(): Flow<List<ConversationEntity>>
 
     /** Title-substring search, preserving pinned-first ordering. */
-    @Query("SELECT * FROM conversations WHERE title LIKE '%' || :query || '%' ORDER BY is_pinned DESC, updated_at DESC")
+    @Query("SELECT * FROM conversations WHERE is_deleted = 0 AND title LIKE '%' || :query || '%' ORDER BY is_pinned DESC, updated_at DESC, id DESC")
     fun searchConversations(query: String): Flow<List<ConversationEntity>>
 
     /**

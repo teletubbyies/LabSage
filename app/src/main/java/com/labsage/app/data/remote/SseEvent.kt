@@ -23,8 +23,15 @@ sealed class SseEvent {
         val traceCount: Int
     ) : SseEvent()
 
-    /** Stream completed successfully. */
-    data object Done : SseEvent()
+    /** Terminal metadata for completed, partial, or failed generation. */
+    data class Done(
+        val conversationId: String,
+        val userMessageId: String,
+        val assistantMessageId: String,
+        val status: String,
+        val updatedAt: Long,
+        val syncVersion: Long
+    ) : SseEvent()
 
     /** Stream error. data = JSON {message, partial, retryable} */
     data class Error(

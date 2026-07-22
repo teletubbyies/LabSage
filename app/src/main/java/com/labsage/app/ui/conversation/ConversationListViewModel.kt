@@ -50,7 +50,7 @@ class ConversationListViewModel(
     }
 
     fun createNewConversation(): String {
-        val id = "session_${UUID.randomUUID().toString().take(8)}_${System.currentTimeMillis()}"
+        val id = UUID.randomUUID().toString()
         return id
     }
 
