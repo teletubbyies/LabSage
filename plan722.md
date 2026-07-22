@@ -268,7 +268,14 @@ deleted_at          nullable tombstone
 - 不返回其他用户数据和已删除数据（增量 tombstone 模式启用前）。
 - 空列表行为明确。
 
-完成状态：`pending`
+完成状态：`completed`
+
+完成记录：
+
+- 独立审查：`PASS`（`review_f04_recheck`；首轮 FAIL 的消息层 user ID 边界和验收测试缺口均已修复）。
+- Go 后端 commit：`49405d4 feat(F04): add scoped conversation history APIs`。
+- 验证：Controller/Store 专项测试、race 检测、`go vet`、`gofmt` 与 `git diff --check` 通过。
+- 会话与消息在 Controller 和 SQL 层均按 JWT user ID 隔离；空列表、软删除、跨用户脏数据、404 一致性和稳定排序均有集成测试。
 
 ### F05：聊天请求服务端持久化与幂等
 
