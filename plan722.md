@@ -478,7 +478,20 @@ deleted_at          nullable tombstone
 - 文档与最终实现一致。
 - 已知限制有明确记录。
 
-完成状态：`pending`
+完成状态：`completed`
+
+完成记录：
+
+- 首轮独立复审：`FAIL`（`review_f11_final_gate`），指出会话变更文档与实现不一致、缺少 Android→Go 真实联调证据、未集中记录全仓既有失败；三项均已修复。
+- 最终独立复审：`PASS`（`review_f11_e2e_gate`）。
+- Go 后端 commit：`019154b feat(F11): secure runtime configuration and document operations`。
+- Android commit：`eaa3eb3 test(F11): document and verify end-to-end integration`。
+- 后端核心验证：`go test -count=1 -race ./internal/store ./internal/controller/chat` 通过；核心包与本次修改包的 `go vet`/`go test` 通过；全新 `/tmp` SQLite 上真实启动并完成注册、登录、`/auth/me`。
+- Android 验证：`testDebugUnitTest`、`assembleDebug`、`lintDebug` 通过；Pixel 8 instrumentation 默认套件 36 项、1 个 opt-in 联调用例按设计跳过、0 失败，其余 35 项（含 Room v2→v5 migration）通过。
+- 真实端云联调：显式启用 `RealBackendSmokeTest` 后 1/1 通过；Android 模拟器使用生产 `AuthApi/LabSageApi` 连接本轮 Go 服务和全新 SQLite，完成注册、legacy import、全量历史、PATCH、DELETE 与增量 tombstone。
+- 安全收口：仓库当前配置不再包含真实 Ark/DashScope/Tencent 明文凭据，新增环境变量示例、`.env` 忽略规则和强制轮换说明；历史凭据仍必须在供应商侧撤销/轮换。
+- 已知旧问题：全仓 `go test -count=1 ./...` 仍因 `internal/ai/cmd/knowledge_cmd` 缺少 `retriever.BuildRetrievalArtifacts` 失败；全包 `go vet ./...` 仍会报告 `internal/ai/tools/query_metrics_alerts.go` 不可达代码。两项均早于 F11 且不在本轮 diff，已写入最终文档。
+- 本轮是工程实现与验证，没有新的学习问答证据，因此按 `AGENTS.md` 规则未追加或虚高学习进度。
 
 ## 6. API 契约草案
 
