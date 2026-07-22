@@ -1,0 +1,502 @@
+# LabSage 登录、JWT 与端云会话同步实施计划
+
+> 制定日期：2026-07-22  
+> 涉及项目：
+> - Android：`/Users/zzy/Desktop/Android/LabSage`
+> - Go 后端：`/Users/zzy/Desktop/go_src/SuperBizAgent`
+>
+> 本文是本轮实现的范围基线、执行顺序与验收依据。未经用户确认，不擅自扩大或缩减核心功能。
+
+## 1. 总体目标
+
+将当前“Android Room 独有完整聊天历史、Go 后端仅持久化摘要/事实且短期消息驻内存”的架构，升级为：
+
+```text
+Compose UI
+   ↓ 只读取
+Room 本地缓存
+   ↑↓ Repository / SyncCoordinator
+REST + SSE（携带 JWT）
+   ↑↓
+Go 服务端
+   ├── users
+   ├── refresh_tokens
+   ├── conversations
+   └── messages
+```
+
+目标职责：
+
+- 服务端数据库是用户、会话和消息的业务权威数据源。
+- Room 是本地缓存、离线展示数据源和流式回答中间态存储。
+- Compose 继续只观察 Room/StateFlow，不直接以网络响应作为列表数据源。
+- SSE 负责回答生成和实时推送；REST 负责认证、同步和会话管理。
+- 后端的 `SimpleMemory` 降级为模型热缓存，可从数据库历史、摘要和事实重建。
+
+## 2. 已对齐的默认技术决策
+
+### 2.1 服务端数据库
+
+- 使用 SQLite + GORM。
+- 数据库路径由环境变量 `APP_DATABASE_PATH` 配置，默认可使用 `data/labsage.db`。
+- 不复用 Agent 工具中的 `mysql_crud`；业务持久化使用独立数据库层。
+- 数据访问通过 repository/service 边界组织，为以后迁移 MySQL/PostgreSQL 保留空间。
+
+### 2.2 登录形态
+
+- 实现用户名 + 密码注册、登录。
+- 暂不实现验证码、找回密码、第三方 OAuth。
+- 密码只保存 bcrypt 哈希。
+
+### 2.3 JWT
+
+- Access Token 有效期 15 分钟。
+- Refresh Token 有效期 30 天。
+- Refresh Token 服务端只保存哈希，并支持撤销。
+- JWT 包含 user ID、token type、签发时间和过期时间。
+- JWT Secret 只从环境变量读取，不写入仓库。
+- Android 普通 API 和 SSE 都必须携带 Bearer Token。
+- Access Token 过期后串行刷新，避免并发 refresh 风暴。
+- Refresh 失败后清理会话并导航至登录页。
+- Android 使用 Keystore 保护持久化 Token，不把 JWT 明文写入普通 DataStore。
+
+### 2.4 既有本地数据
+
+- Room 升级时为已有会话、消息补充全局稳定 UUID。
+- 用户首次登录后，执行一次 legacy import，将当前设备已有会话和消息导入当前账户。
+- 导入以 UUID 幂等，成功后记录 `legacy_import_completed`。
+- 不因加入登录功能而丢弃已有真机聊天历史。
+
+### 2.5 同步原则
+
+- 服务端权威、Room 缓存、UI 只读 Room。
+- 首次完整同步，后续使用服务端增量游标。
+- 不依赖设备时间作为唯一游标。
+- 消息发送使用 `clientRequestId` 幂等；重试必须复用同一个 ID。
+- 会话删除采用软删除/tombstone，使其他客户端能感知删除。
+- 会话元数据更新携带 version；冲突返回 HTTP 409。
+- 第一、二期不实现 CRDT。
+
+## 3. 数据模型
+
+### 3.1 users
+
+```text
+id                 UUID primary key
+username           unique, normalized
+password_hash
+created_at
+updated_at
+```
+
+### 3.2 refresh_tokens
+
+```text
+id                 UUID primary key
+user_id            foreign key
+token_hash         unique
+expires_at
+revoked_at         nullable
+created_at
+```
+
+### 3.3 conversations
+
+```text
+id                 UUID primary key
+user_id            foreign key + index
+title
+is_pinned
+version
+sync_version       monotonic server cursor
+created_at
+updated_at
+deleted_at         nullable tombstone
+```
+
+### 3.4 messages
+
+```text
+id                 UUID/ULID primary key
+conversation_id    foreign key + index
+role               user / assistant
+content
+status             pending / streaming / completed / partial / failed
+route               nullable
+original_question  nullable
+error_message       nullable
+client_request_id   unique within user/request scope
+client_created_at
+sync_version        monotonic server cursor
+created_at
+updated_at
+deleted_at          nullable tombstone
+```
+
+所有会话和消息操作必须依据认证后的 user ID 校验归属，禁止仅凭 conversation ID 访问。
+
+## 4. 执行纪律：逐功能子代理审查门禁
+
+### 4.1 功能单元定义
+
+本文第 5 节中的每个 `Fxx` 编号是一个独立功能单元。“每完成一个功能”指完成一个 `Fxx` 单元，而不是每写一个代码函数。
+
+### 4.2 强制审查流程
+
+每完成一个 `Fxx` 功能后，主代理必须：
+
+1. 停止进入下一个功能。
+2. 启动一个独立子代理作为计划一致性审查员。
+3. 要求子代理完整读取本文件，并检查该功能涉及的实际 diff、测试和文档。
+4. 子代理至少核对：范围、数据契约、安全边界、错误处理、测试覆盖、是否破坏既有功能。
+5. 子代理给出 `PASS` 或 `FAIL`，并列出证据和缺口。
+6. 若为 `FAIL`，主代理先修复，再启动新的独立子代理复审；不得自行宣告通过。
+7. 只有获得 `PASS` 后，才将该功能标记为 `completed`。
+8. 将该功能涉及的文件单独暂存并创建 git commit；不得夹带工作区中原有或与该功能无关的修改。
+9. 若一个功能同时修改 Android 与 Go 两个独立仓库，则在两个仓库分别提交，并记录两个 commit hash。
+10. commit message 使用 `feat(Fxx): ...`、`fix(Fxx): ...` 或 `test(Fxx): ...` 格式，明确关联功能编号。
+11. 只有审查通过且 commit 成功后，才进入下一个功能；若提交失败，先解决提交问题，不得跳过。
+
+每个审查子代理应尽量只负责一个功能审查，避免实现者与审查者角色混同。主代理在最终交付中汇总各功能的审查结果。
+
+### 4.3 计划偏差处理
+
+- 发现必须改变 API、数据模型、安全策略或迁移策略时，先停止实现并向用户说明。
+- 用户确认后，先更新本文，再继续编码。
+- 小型内部实现细节可以调整，但不得改变外部行为和验收标准。
+
+## 5. 功能拆分与实施顺序
+
+### F01：后端业务数据库基础
+
+范围：
+
+- 引入 SQLite GORM driver。
+- 增加数据库配置、初始化、连接生命周期和自动迁移。
+- 建立 users、refresh_tokens、conversations、messages 模型。
+- 建立 repository 层和必要的唯一索引/外键/同步版本机制。
+- 保证应用重启后数据仍存在。
+
+验收：
+
+- 临时数据库可自动建表。
+- 重启/重新连接后数据可读。
+- 唯一索引与外键约束有测试。
+- 数据库初始化失败时服务明确失败或报告错误，不静默退化为内存存储。
+
+完成状态：`completed`
+
+完成记录：
+
+- 独立复审：`PASS`（`review_f01_recheck`）。
+- Go 后端 commit：`8f8f253 feat(F01): add persistent application database`。
+- 专项验证：`go test ./internal/store -count=1`、`go test -race ./internal/store -count=1`、`go vet ./internal/store`、`git diff --check` 通过。
+- 全仓测试存在 F01 之前的已知失败：`internal/ai/cmd/knowledge_cmd` 引用缺失的 `retriever.BuildRetrievalArtifacts`；审查确认与 F01 diff 无关。
+
+### F02：后端注册、登录与 JWT
+
+范围：
+
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/refresh`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
+- bcrypt 密码哈希。
+- Access/Refresh Token 签发、校验、轮换、撤销。
+- JWT 认证中间件和上下文 user ID 注入。
+
+验收：
+
+- 正常注册/登录/刷新/注销链路通过。
+- 重复用户名、错误密码、缺失/过期/篡改 Token 返回明确错误。
+- Refresh Token 数据库只保存哈希。
+- Refresh Token 轮换后旧 Token 不可继续使用。
+- Secret 缺失时不使用硬编码默认密钥启动生产式认证。
+
+完成状态：`pending`
+
+### F03：Android 登录 UI 与安全 Token 管理
+
+范围：
+
+- 增加登录页、注册页和认证状态路由。
+- 增加 Auth API、AuthRepository、AuthViewModel。
+- 使用 Android Keystore 保护 Token 持久化。
+- Retrofit 请求自动添加 Access Token。
+- SSE 请求添加 Access Token。
+- 实现串行 Token refresh；refresh 失败回到登录页。
+
+验收：
+
+- 冷启动能恢复有效登录状态。
+- 普通 REST 与 SSE 都带 Authorization header。
+- 多个并发 401 不会触发 refresh 风暴。
+- Token 不以明文出现在普通 DataStore/SharedPreferences。
+- 登录错误、加载态、退出登录 UI 完整。
+
+完成状态：`pending`
+
+### F04：后端会话与消息查询 API
+
+范围：
+
+- `GET /api/conversations`
+- `GET /api/conversations/{id}/messages`
+- 第一阶段允许完整返回，为后续增量参数保留契约。
+- 所有读取按 JWT user ID 隔离。
+
+验收：
+
+- 用户只能读取自己的会话和消息。
+- 会话排序、消息顺序稳定。
+- 不返回其他用户数据和已删除数据（增量 tombstone 模式启用前）。
+- 空列表行为明确。
+
+完成状态：`pending`
+
+### F05：聊天请求服务端持久化与幂等
+
+范围：
+
+- 扩展 `/api/chat` 与 `/api/chat_stream` 请求：conversation ID、client message ID、client request ID。
+- 后端校验会话归属。
+- 聊天业务流内保存用户消息，不要求 Android 额外上传一次。
+- 正常完成后保存助手完整消息。
+- 中断时保存 partial/failed 状态和已产生内容。
+- `done` SSE 事件返回服务端消息 ID、状态和更新时间。
+- `clientRequestId` 唯一约束和幂等重放。
+- 数据库历史参与 `SimpleMemory` 冷启动重建。
+
+验收：
+
+- 同一 client request 重试不会产生重复用户消息或助手消息。
+- 服务重启后历史可查询，模型最近上下文可重建。
+- SSE 不按每个 token 写服务端数据库。
+- 正常结束和中断状态一致、有测试。
+
+完成状态：`pending`
+
+### F06：Android Room 全局 ID 迁移
+
+范围：
+
+- Conversation ID 统一为 UUID。
+- Message 主键从本机自增 Long 迁移为 String UUID。
+- 保留已有会话和消息及其外键关系。
+- 通知 message ID、Navigation 参数和所有相关调用改为 String。
+- 增加同步所需字段：server/sync version、status、deleted、client request ID 等。
+
+验收：
+
+- Room migration 测试验证已有数据不丢失。
+- 迁移后消息仍属于正确会话。
+- 通知精确跳转仍工作。
+- 新旧数据均可正常展示。
+
+完成状态：`pending`
+
+### F07：Android 首次全量同步与 Room 回填
+
+范围：
+
+- 登录成功/冷启动后同步会话。
+- 进入会话时同步消息。
+- 使用 Room transaction 批量 upsert。
+- UI 立即显示本地缓存，网络同步后台刷新。
+- 同步失败保留缓存并显示非阻断错误/重试入口。
+
+验收：
+
+- 清空本地数据库后登录可以恢复服务端历史。
+- 有缓存时冷启动无需等待网络即可展示。
+- 重复全量同步不会重复插入。
+- Room 仍然是列表和消息 UI 的唯一数据读取源。
+
+完成状态：`pending`
+
+### F08：既有 Room 历史一次性导入
+
+范围：
+
+- `POST /api/sync/import`。
+- 为迁移后的既有本地记录补齐稳定 ID。
+- 首次登录后将 legacy 数据批量导入当前账户。
+- 服务端按 ID 幂等导入。
+- 成功后记录 `legacy_import_completed`。
+
+验收：
+
+- 导入不会丢失用户/助手消息或会话关系。
+- 导入中断后可安全重试。
+- 重复导入不会重复数据。
+- 只有服务端确认成功后才记录本地完成标志。
+
+完成状态：`pending`
+
+### F09：服务端增量同步游标
+
+范围：
+
+- `GET /api/conversations?updatedAfter=<cursor>`。
+- `GET /api/conversations/{id}/messages?updatedAfter=<cursor>`。
+- 响应包含 items、nextCursor、serverTime。
+- 使用服务端单调 sync version，避免设备时钟问题。
+- Android 持久化游标并在 transaction 成功后推进。
+
+验收：
+
+- 同一时间发生多条更新不会遗漏。
+- 同步失败不会错误推进游标。
+- 重放同一游标结果幂等。
+- 首次无游标完整同步，后续只返回增量。
+
+完成状态：`pending`
+
+### F10：会话重命名、置顶、软删除同步
+
+范围：
+
+- `PATCH /api/conversations/{id}` 支持 title、isPinned、version。
+- `DELETE /api/conversations/{id}` 执行软删除并生成 tombstone。
+- Android 重命名、置顶、删除同步到服务端。
+- 其他客户端通过增量同步获得修改和删除。
+- version 冲突返回 409，客户端拉取最新版并处理。
+
+验收：
+
+- 重命名、置顶在重新登录/另一客户端可恢复。
+- 删除后其他客户端能移除本地记录。
+- 用户不能修改或删除他人的会话。
+- 旧 version 更新不会静默覆盖新数据。
+- 当前延迟删除/撤销体验不被破坏；撤销窗口结束后才提交服务端删除。
+
+完成状态：`pending`
+
+### F11：端到端联调、回归测试与文档
+
+范围：
+
+- 执行 Go 测试、Android 单元测试、Room migration 测试和 Android 编译。
+- 条件允许时进行模拟器/真机登录、聊天、重启恢复、同步、删除联调。
+- 更新 API、架构、功能、面试讲解和安全配置文档。
+- 删除或替换仓库中的真实明文密钥，并记录环境变量配置方式；若无法确认密钥状态，明确要求用户轮换。
+- 按实际问答和掌握程度更新 `AGENTS.md`，不虚高标注。
+
+验收：
+
+- 所有新增自动化测试通过。
+- Android debug build 成功。
+- 后端在新数据库上可启动并完成核心链路。
+- 文档与最终实现一致。
+- 已知限制有明确记录。
+
+完成状态：`pending`
+
+## 6. API 契约草案
+
+### 6.1 Auth
+
+```http
+POST /api/auth/register
+POST /api/auth/login
+POST /api/auth/refresh
+POST /api/auth/logout
+GET  /api/auth/me
+```
+
+### 6.2 Conversations / Messages
+
+```http
+GET    /api/conversations?updatedAfter=<cursor>
+GET    /api/conversations/{id}/messages?updatedAfter=<cursor>
+PATCH  /api/conversations/{id}
+DELETE /api/conversations/{id}
+POST   /api/sync/import
+```
+
+### 6.3 Chat stream request
+
+```json
+{
+  "Id": "conversation-uuid",
+  "Question": "用户问题",
+  "ClientMessageId": "message-uuid",
+  "ClientRequestId": "request-uuid",
+  "Continue": false,
+  "PartialAnswer": ""
+}
+```
+
+SSE `done` 事件应返回结构化 JSON，而不是仅返回文本：
+
+```json
+{
+  "conversationId": "conversation-uuid",
+  "userMessageId": "message-uuid",
+  "assistantMessageId": "message-uuid",
+  "status": "completed",
+  "updatedAt": 0,
+  "syncVersion": 0
+}
+```
+
+## 7. 测试总表
+
+### 7.1 后端
+
+- 注册成功、重复用户名、弱/空密码校验。
+- 登录成功、错误密码。
+- JWT 缺失、过期、篡改、token type 错误。
+- Refresh Token 轮换、注销、过期和重放。
+- 用户 A 无法读取/修改/删除用户 B 的数据。
+- client request 幂等。
+- SSE 完成/中断持久化。
+- 服务重启后历史与上下文恢复。
+- 增量游标不遗漏且可重放。
+- tombstone 跨客户端同步。
+- version 冲突返回 409。
+
+### 7.2 Android
+
+- 登录状态恢复。
+- Access Token 自动刷新及并发刷新互斥。
+- Refresh 失败退出登录。
+- Room migration 保留既有数据和关系。
+- 冷启动缓存优先。
+- 全量/增量同步幂等。
+- legacy import 可重试且不重复。
+- SSE 正常完成与中断状态。
+- 通知按 String message ID 精确跳转。
+- 重命名、置顶、删除端云一致。
+
+## 8. 明确不在本轮范围
+
+- 邮箱验证码、找回密码、OAuth/微信登录。
+- 多租户组织/角色权限系统。
+- CRDT 或多人实时编辑。
+- WebSocket 双向同步。
+- 完整离线发送 Outbox/WorkManager 自动重试体系。
+- 服务端多实例分布式锁与 Redis 会话缓存。
+- 生产级登录限流、风控和设备管理界面。
+- MySQL/PostgreSQL 正式部署。
+
+这些内容可以在面试中作为生产化演进方向说明，但不应阻塞第一、二期交付。
+
+## 9. 权限与工作区说明
+
+- Android 项目位于当前可写工作区。
+- Go 后端位于 `/Users/zzy/Desktop/go_src/SuperBizAgent`；实际修改前需要获得对应写权限。
+- 两个仓库可能已有用户未提交修改，实施时必须只修改任务相关内容，不覆盖或回退用户变更。
+
+## 10. 最终完成定义
+
+只有同时满足以下条件，本计划才算完成：
+
+1. F01—F11 全部实现并标记为 `completed`。
+2. 每个功能都有独立子代理给出的最终 `PASS` 审查。
+3. 每个功能在所有受影响仓库中都有独立、可追踪且不夹带无关修改的 git commit。
+4. 核心测试与构建通过，或不可执行项有可验证的外部阻塞说明。
+5. Android 与 Go 后端完成实际端到端联动。
+6. 文档、API 契约和代码行为一致。
+7. 旧 Room 历史没有因迁移或登录功能被静默丢弃。
