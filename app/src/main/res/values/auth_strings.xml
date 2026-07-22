@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="auth_welcome_back">欢迎回来</string>
+    <string name="auth_create_account">创建账户</string>
+    <string name="auth_login_subtitle">登录后同步你的会话与消息</string>
+    <string name="auth_register_subtitle">用户名统一使用小写保存</string>
+    <string name="auth_username">用户名</string>
+    <string name="auth_password">密码</string>
+    <string name="auth_show_password">显示密码</string>
+    <string name="auth_hide_password">隐藏密码</string>
+    <string name="auth_login">登录</string>
+    <string name="auth_register">注册</string>
+    <string name="auth_no_account">还没有账户？</string>
+    <string name="auth_have_account">已经有账户？</string>
+    <string name="auth_account">账户</string>
+    <string name="auth_signed_in_as">当前登录：%1$s</string>
+    <string name="auth_logout">退出登录</string>
+    <string name="auth_logout_confirm">退出后仍会保留本地缓存，下次登录将重新同步。</string>
+</resources>

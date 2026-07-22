@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Verified
@@ -42,12 +44,18 @@ import com.labsage.app.ui.chat.components.BrandMark
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(
+    username: String,
+    onBack: () -> Unit,
+    onLogout: () -> Unit,
+    onBaseUrlChange: (String) -> Unit
+) {
     val app = androidx.compose.ui.platform.LocalContext.current.applicationContext as LabSageApplication
     val viewModel: SettingsViewModel = viewModel(factory = app.settingsViewModelFactory)
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val scheme = MaterialTheme.colorScheme
+    var showLogoutConfirmation by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = scheme.background,
@@ -128,7 +136,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Spacer(Modifier.height(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Button(
-                        onClick = { viewModel.setBaseUrl(url) },
+                        onClick = { onBaseUrlChange(url) },
                         enabled = url.trim() != settings.baseUrl && url.isNotBlank(),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = scheme.primary)
@@ -221,8 +229,48 @@ fun SettingsScreen(onBack: () -> Unit) {
                 QuickActionToggle(stringResource(R.string.conda_environment), Icons.Filled.Terminal, QuickAction.CONDA, settings.quickActions, viewModel::toggleQuickAction)
             }
 
+            SectionCard(
+                title = stringResource(R.string.auth_account),
+                subtitle = stringResource(R.string.auth_signed_in_as, username),
+                icon = Icons.Default.Person
+            ) {
+                OutlinedButton(
+                    onClick = { showLogoutConfirmation = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = scheme.error)
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Logout, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.auth_logout))
+                }
+            }
+
             Spacer(Modifier.height(12.dp))
         }
+    }
+
+    if (showLogoutConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirmation = false },
+            icon = { Icon(Icons.AutoMirrored.Filled.Logout, null, tint = scheme.error) },
+            title = { Text(stringResource(R.string.auth_logout)) },
+            text = { Text(stringResource(R.string.auth_logout_confirm)) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showLogoutConfirmation = false
+                        onLogout()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = scheme.error)
+                ) { Text(stringResource(R.string.auth_logout)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutConfirmation = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
     }
 }
 

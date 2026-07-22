@@ -5,6 +5,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.room.Room
 import com.google.gson.Gson
+import com.labsage.app.data.auth.AccessTokenAuthenticator
+import com.labsage.app.data.auth.AccessTokenInterceptor
+import com.labsage.app.data.auth.AuthApi
+import com.labsage.app.data.auth.AuthRepository
+import com.labsage.app.data.auth.BackendSwitchCoordinator
+import com.labsage.app.data.auth.KeystoreAuthSessionStore
+import com.labsage.app.ui.auth.AuthViewModel
 import com.labsage.app.data.local.AppDatabase
 import com.labsage.app.data.remote.LabSageApi
 import com.labsage.app.data.remote.OkHttpSseDataSource
@@ -78,13 +85,54 @@ class LabSageApplication : Application() {
             .stateIn(appScope, SharingStarted.Eagerly, AppSettings())
     }
 
-    private val currentBaseUrl: String get() = appSettings.value.baseUrl
+    private val currentBaseUrl: String
+        get() = authRepository.sessionBaseUrl() ?: appSettings.value.baseUrl
 
     // ============================================================
     // JSON
     // ============================================================
 
     val gson: Gson by lazy { Gson() }
+
+    // ============================================================
+    // Authentication — encrypted session + isolated refresh client
+    // ============================================================
+
+    private val authSessionStore by lazy { KeystoreAuthSessionStore(this, gson) }
+
+    private val authApiCache = ConcurrentHashMap<String, AuthApi>()
+
+    /** Auth endpoints use the base client to prevent a 401 → refresh recursion. */
+    private fun authApiFor(rawUrl: String): AuthApi {
+        val base = normalizeBaseUrl(rawUrl)
+        return authApiCache.getOrPut(base) {
+            Retrofit.Builder()
+                .baseUrl(base)
+                .client(baseOkHttpClient)
+                .addConverterFactory(GsonConverterFactory.create(gson))
+                .build()
+                .create(AuthApi::class.java)
+        }
+    }
+
+    val authRepository: AuthRepository by lazy {
+        AuthRepository(
+            apiProvider = ::authApiFor,
+            sessionStore = authSessionStore,
+            baseUrlProvider = { normalizeBaseUrl(appSettings.value.baseUrl) }
+        )
+    }
+
+    val backendSwitchCoordinator: BackendSwitchCoordinator by lazy {
+        BackendSwitchCoordinator(
+            applicationScope = appScope,
+            logout = authRepository::logout,
+            persistBaseUrl = settingsRepository::setBaseUrl
+        )
+    }
+
+    private val accessTokenInterceptor by lazy { AccessTokenInterceptor(authRepository) }
+    private val accessTokenAuthenticator by lazy { AccessTokenAuthenticator(authRepository) }
 
     // ============================================================
     // OkHttp — shared connection pool via newBuilder()
@@ -95,6 +143,7 @@ class LabSageApplication : Application() {
         OkHttpClient.Builder()
             .addInterceptor(HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.HEADERS
+                redactHeader("Authorization")
             })
             .build()
     }
@@ -102,6 +151,8 @@ class LabSageApplication : Application() {
     /** OkHttp client for Retrofit — 30s timeouts, body logging OK for short requests */
     val apiOkHttpClient: OkHttpClient by lazy {
         baseOkHttpClient.newBuilder()
+            .addInterceptor(accessTokenInterceptor)
+            .authenticator(accessTokenAuthenticator)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
@@ -111,6 +162,8 @@ class LabSageApplication : Application() {
     /** OkHttp client for SSE — no read timeout (stream is long-lived), headers-only logging */
     val sseOkHttpClient: OkHttpClient by lazy {
         baseOkHttpClient.newBuilder()
+            .addInterceptor(accessTokenInterceptor)
+            .authenticator(accessTokenAuthenticator)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)   // no timeout for SSE
             .writeTimeout(30, TimeUnit.SECONDS)
@@ -184,6 +237,18 @@ class LabSageApplication : Application() {
     // ============================================================
     // ViewModel factories
     // ============================================================
+
+    val authViewModelFactory: ViewModelProvider.Factory by lazy {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                if (modelClass.isAssignableFrom(AuthViewModel::class.java)) {
+                    return AuthViewModel(authRepository) as T
+                }
+                throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
+            }
+        }
+    }
 
     fun chatViewModelFactory(conversationId: String): ViewModelProvider.Factory {
         return object : ViewModelProvider.Factory {

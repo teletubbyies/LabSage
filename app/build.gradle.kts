@@ -87,6 +87,8 @@ dependencies {
 
     // Testing
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
     androidTestImplementation(libs.androidx.junit)
     // espresso 3.7.0 is required on Android 16 (API 36+): 3.6.x's input injector reflectively
     // calls InputManager.getInstance(), which was removed. Compose's createComposeRule() routes

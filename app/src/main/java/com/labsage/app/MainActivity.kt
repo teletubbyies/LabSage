@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -19,12 +20,16 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.labsage.app.data.auth.AuthenticationState
+import com.labsage.app.ui.auth.AuthLoadingScreen
+import com.labsage.app.ui.auth.AuthScreen
 import com.labsage.app.domain.model.ThemeMode
 import com.labsage.app.notification.ResponseNotificationManager
 import com.labsage.app.ui.chat.ChatScreen
 import com.labsage.app.ui.conversation.ConversationListScreen
 import com.labsage.app.ui.settings.SettingsScreen
 import com.labsage.app.ui.theme.LabSageTheme
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var notificationDestination by mutableStateOf<NotificationDestination?>(null)
@@ -88,6 +93,7 @@ fun LabSageRoot(
 ) {
     val app = LocalContext.current.applicationContext as LabSageApplication
     val settings by app.appSettings.collectAsStateWithLifecycle()
+    val authenticationState by app.authRepository.state.collectAsStateWithLifecycle()
     val systemDark = isSystemInDarkTheme()
     val darkTheme = when (settings.themeMode) {
         ThemeMode.SYSTEM -> systemDark
@@ -95,16 +101,27 @@ fun LabSageRoot(
         ThemeMode.DARK -> true
     }
     LabSageTheme(darkTheme = darkTheme) {
-        LabSageNavGraph(notificationDestination, onNotificationDestinationConsumed)
+        when (val authState = authenticationState) {
+            AuthenticationState.Initializing -> AuthLoadingScreen()
+            AuthenticationState.Unauthenticated -> AuthScreen()
+            is AuthenticationState.Authenticated -> LabSageNavGraph(
+                authenticatedUsername = authState.user.username,
+                notificationDestination = notificationDestination,
+                onNotificationDestinationConsumed = onNotificationDestinationConsumed
+            )
+        }
     }
 }
 
 @Composable
 fun LabSageNavGraph(
+    authenticatedUsername: String,
     notificationDestination: NotificationDestination? = null,
     onNotificationDestinationConsumed: () -> Unit = {}
 ) {
     val navController = rememberNavController()
+    val app = LocalContext.current.applicationContext as LabSageApplication
+    val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(notificationDestination) {
         val destination = notificationDestination ?: return@LaunchedEffect
@@ -157,7 +174,13 @@ fun LabSageNavGraph(
         }
 
         composable(NavRoutes.SETTINGS) {
-            SettingsScreen(onBack = { navController.popBackStack() })
+            SettingsScreen(
+                username = authenticatedUsername,
+                onBack = { navController.popBackStack() },
+                onLogout = { coroutineScope.launch { app.authRepository.logout() } },
+                // Application scope survives the authentication route disappearing after logout.
+                onBaseUrlChange = app.backendSwitchCoordinator::switchTo
+            )
         }
     }
 }
