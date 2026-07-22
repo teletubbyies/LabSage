@@ -23,7 +23,7 @@ import java.util.UUID
         ConversationEntity::class,
         MessageEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -150,6 +150,17 @@ abstract class AppDatabase : RoomDatabase() {
                 }
                 db.execSQL("CREATE INDEX index_messages_conversation_id ON messages(conversation_id)")
                 db.execSQL("CREATE INDEX index_messages_client_request_id ON messages(client_request_id)")
+            }
+        }
+
+        /** v3 → v4: scope the local cache to the authenticated account. */
+        val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE conversations ADD COLUMN owner_user_id TEXT")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_conversations_owner_user_id " +
+                        "ON conversations(owner_user_id)"
+                )
             }
         }
 

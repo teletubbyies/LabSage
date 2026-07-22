@@ -7,6 +7,7 @@ import com.labsage.app.data.local.entity.MessageEntity
 import com.labsage.app.data.remote.SseEvent
 import com.labsage.app.data.remote.UploadData
 import com.labsage.app.data.repository.ChatRepository
+import com.labsage.app.data.sync.HistorySyncState
 import com.labsage.app.data.repository.SettingsRepository
 import com.labsage.app.domain.model.StreamState
 import com.labsage.app.domain.model.ToolCallStatus
@@ -49,6 +50,9 @@ class ChatViewModel(
 
     private val _uploadState = MutableStateFlow<UploadState>(UploadState.Idle)
     val uploadState: StateFlow<UploadState> = _uploadState.asStateFlow()
+
+    private val _historySyncState = MutableStateFlow(HistorySyncState())
+    val historySyncState: StateFlow<HistorySyncState> = _historySyncState.asStateFlow()
 
     /** Live trace lines during SSE streaming — shown in execution panel */
     private val _traceLines = MutableStateFlow<List<String>>(emptyList())
@@ -149,6 +153,19 @@ class ChatViewModel(
                 _approvalMode.value = s.approvalMode
             }
         }
+        refreshMessages()
+    }
+
+    fun refreshMessages() {
+        if (_historySyncState.value.isSyncing) return
+        viewModelScope.launch {
+            _historySyncState.value = HistorySyncState(isSyncing = true)
+            val result = repository.syncMessages(conversationId)
+            _historySyncState.value = result.fold(
+                onSuccess = { HistorySyncState() },
+                onFailure = { HistorySyncState(errorMessage = it.message ?: "Message sync failed") }
+            )
+        }
     }
 
     // ============================================================
@@ -171,19 +188,28 @@ class ChatViewModel(
         lastQuestion = question
 
         viewModelScope.launch {
-            // CRITICAL(checked): create conversation BEFORE inserting messages (Foreign Key constraint in db)
-            repository.upsertConversation(conversationId, deriveTitle(question))
-            // Now persist user message
-            currentUserMessageId = UUID.randomUUID().toString()
-            currentClientRequestId = UUID.randomUUID().toString()
-            currentClientCreatedAt = System.currentTimeMillis()
-            repository.saveUserMessage(
-                conversationId = conversationId,
-                content = question,
-                messageId = checkNotNull(currentUserMessageId),
-                clientRequestId = checkNotNull(currentClientRequestId),
-                clientCreatedAt = currentClientCreatedAt
-            )
+            try {
+                // CRITICAL(checked): create conversation BEFORE inserting messages (Foreign Key constraint in db)
+                repository.upsertConversation(conversationId, deriveTitle(question))
+                // Now persist user message
+                currentUserMessageId = UUID.randomUUID().toString()
+                currentClientRequestId = UUID.randomUUID().toString()
+                currentClientCreatedAt = System.currentTimeMillis()
+                repository.saveUserMessage(
+                    conversationId = conversationId,
+                    content = question,
+                    messageId = checkNotNull(currentUserMessageId),
+                    clientRequestId = checkNotNull(currentClientRequestId),
+                    clientCreatedAt = currentClientCreatedAt
+                )
+            } catch (e: Exception) {
+                _streamState.value = StreamState.Error(
+                    message = e.message ?: "Unable to write this conversation",
+                    retryable = false,
+                    lastQuestion = question
+                )
+                return@launch
+            }
 
             // Reset stream state
             _streamState.value = StreamState.Streaming
@@ -305,7 +331,7 @@ class ChatViewModel(
                         content = accumulatedAnswer.toString(),
                         isPartial = true,
                         originalQuestion = lastQuestion,
-                        clientRequestId = currentClientRequestId
+                        clientRequestId = checkNotNull(currentClientRequestId)
                     )
                 } else if (chunkCount % 5 == 0) {
                     // Batch: write to Room every 5th chunk (reduces disk I/O
@@ -445,7 +471,7 @@ class ChatViewModel(
             isPartial = failure.isPartial,
             originalQuestion = lastQuestion,
             errorMessage = message,
-            clientRequestId = currentClientRequestId,
+            clientRequestId = checkNotNull(currentClientRequestId),
             status = failure.status
         )
         streamingMessageId = terminalMessageId

@@ -69,12 +69,12 @@ class AppDatabaseMigrationTest {
         helper.close()
 
         val room = Room.databaseBuilder(context, AppDatabase::class.java, databaseName)
-            .addMigrations(AppDatabase.MIGRATION_2_3)
+            .addMigrations(AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
             .build()
         val db = room.openHelper.writableDatabase // Opens, migrates, and validates Room's v3 schema.
 
         val conversationId = db.query(
-            "SELECT id, title, is_pinned, version, sync_version, is_deleted " +
+            "SELECT id, title, is_pinned, version, sync_version, is_deleted, owner_user_id " +
                 "FROM conversations WHERE title = 'Legacy'"
         ).use { cursor ->
             assertTrue(cursor.moveToFirst())
@@ -87,6 +87,7 @@ class AppDatabaseMigrationTest {
             assertEquals(0L, cursor.getLong(3))
             assertEquals(0L, cursor.getLong(4))
             assertEquals(0, cursor.getInt(5))
+            assertTrue(cursor.isNull(6))
             id
         }
         db.query("SELECT id FROM conversations WHERE title = 'Already UUID'").use { cursor ->
@@ -123,7 +124,13 @@ class AppDatabaseMigrationTest {
         }
 
         runBlocking {
-            val migrated = room.messageDao().getMessagesByConversation(conversationId).first()
+            room.conversationDao().claimLegacyRows("migration-user")
+            assertEquals(
+                "migration-user",
+                room.conversationDao().getById("migration-user", conversationId)?.ownerUserId
+            )
+            val migrated = room.messageDao()
+                .getMessagesByConversation("migration-user", conversationId).first()
             assertEquals(listOf("question", "half"), migrated.map { it.content })
             assertTrue(migrated.all { runCatching { UUID.fromString(it.id) }.isSuccess })
 
@@ -137,7 +144,8 @@ class AppDatabaseMigrationTest {
                     clientRequestId = UUID.randomUUID().toString()
                 )
             )
-            val oldAndNew = room.messageDao().getMessagesByConversation(conversationId).first()
+            val oldAndNew = room.messageDao()
+                .getMessagesByConversation("migration-user", conversationId).first()
             assertEquals(3, oldAndNew.size)
             assertTrue(oldAndNew.any { it.id == newMessageId && it.content == "new data" })
         }

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.labsage.app.data.local.entity.ConversationEntity
 import com.labsage.app.data.repository.ChatRepository
+import com.labsage.app.data.sync.HistorySyncState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,6 +24,9 @@ class ConversationListViewModel(
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    private val _syncState = MutableStateFlow(HistorySyncState())
+    val syncState: StateFlow<HistorySyncState> = _syncState.asStateFlow()
 
     /**
      * Conversations staged for deletion are hidden immediately, but remain in
@@ -44,6 +48,22 @@ class ConversationListViewModel(
             conversations.filterNot { it.id in pendingIds }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    init {
+        refreshConversations()
+    }
+
+    fun refreshConversations() {
+        if (_syncState.value.isSyncing) return
+        viewModelScope.launch {
+            _syncState.value = HistorySyncState(isSyncing = true)
+            val result = repository.syncConversations()
+            _syncState.value = result.fold(
+                onSuccess = { HistorySyncState() },
+                onFailure = { HistorySyncState(errorMessage = it.message ?: "Conversation sync failed") }
+            )
+        }
+    }
 
     fun setSearchQuery(query: String) {
         _searchQuery.value = query

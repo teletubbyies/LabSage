@@ -68,6 +68,7 @@ fun ChatScreen(
     val toolCalls by viewModel.toolCalls.collectAsStateWithLifecycle()
     val activeRoute by viewModel.activeRoute.collectAsStateWithLifecycle()
     val pendingSend by viewModel.pendingSend.collectAsStateWithLifecycle()
+    val historySyncState by viewModel.historySyncState.collectAsStateWithLifecycle()
     val settings by app.appSettings.collectAsStateWithLifecycle()
 
     var inputText by remember { mutableStateOf("") }
@@ -260,6 +261,7 @@ fun ChatScreen(
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            SyncStatusBanner(historySyncState, viewModel::refreshMessages)
             // Offline banner
             if (!isOnline) {
                 Surface(Modifier.fillMaxWidth(), color = scheme.errorContainer) {

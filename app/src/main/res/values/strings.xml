@@ -102,4 +102,6 @@
     <string name="connection_testing">正在测试…</string>
     <string name="connection_success">连接成功 · %1$d ms</string>
     <string name="connection_failed">连接失败 · %1$s</string>
+    <string name="history_sync_failed">历史同步失败 · %1$s</string>
+    <string name="history_sync_retry">重试</string>
 </resources>

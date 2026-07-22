@@ -156,6 +156,40 @@ data class SseDonePayload(
     @SerializedName("syncVersion") val syncVersion: Long
 )
 
+data class ConversationListData(
+    @SerializedName("items") val items: List<ConversationDto> = emptyList()
+)
+
+data class ConversationDto(
+    @SerializedName("id") val id: String,
+    @SerializedName("title") val title: String,
+    @SerializedName("isPinned") val isPinned: Boolean,
+    @SerializedName("version") val version: Long,
+    @SerializedName("syncVersion") val syncVersion: Long,
+    @SerializedName("createdAt") val createdAt: Long,
+    @SerializedName("updatedAt") val updatedAt: Long
+)
+
+data class MessageListData(
+    @SerializedName("items") val items: List<MessageDto> = emptyList()
+)
+
+data class MessageDto(
+    @SerializedName("id") val id: String,
+    @SerializedName("conversationId") val conversationId: String,
+    @SerializedName("role") val role: String,
+    @SerializedName("content") val content: String,
+    @SerializedName("status") val status: String,
+    @SerializedName("route") val route: String? = null,
+    @SerializedName("originalQuestion") val originalQuestion: String? = null,
+    @SerializedName("errorMessage") val errorMessage: String? = null,
+    @SerializedName("clientRequestId") val clientRequestId: String? = null,
+    @SerializedName("clientCreatedAt") val clientCreatedAt: Long,
+    @SerializedName("syncVersion") val syncVersion: Long,
+    @SerializedName("createdAt") val createdAt: Long,
+    @SerializedName("updatedAt") val updatedAt: Long
+)
+
 // ============================================================
 // Session context (summary + facts) — GET/PUT /api/session/context
 // ============================================================

@@ -27,7 +27,11 @@ class MessageTerminalStateTest {
             val context = ApplicationProvider.getApplicationContext<Context>()
             database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
             database.conversationDao().insert(
-                ConversationEntity(id = "conversation-uuid", title = "Conversation")
+                ConversationEntity(
+                    id = "conversation-uuid",
+                    title = "Conversation",
+                    ownerUserId = "test-user"
+                )
             )
         }
     }
@@ -53,31 +57,33 @@ class MessageTerminalStateTest {
         )
 
         dao.markTerminal(
+            userId = "test-user",
             messageId = "local-assistant-uuid",
             content = "half answer",
             status = "partial",
             isPartial = true,
             errorMessage = "connection lost"
         )
-        var row = dao.getMessagesByConversation("conversation-uuid").first().single()
+        var row = dao.getMessagesByConversation("test-user", "conversation-uuid").first().single()
         assertEquals("partial", row.status)
         assertTrue(row.isPartial)
         assertEquals("connection lost", row.errorMessage)
 
-        dao.markStreaming("local-assistant-uuid")
-        row = dao.getMessagesByConversation("conversation-uuid").first().single()
+        dao.markStreaming("test-user", "local-assistant-uuid")
+        row = dao.getMessagesByConversation("test-user", "conversation-uuid").first().single()
         assertEquals("streaming", row.status)
         assertTrue(row.isPartial)
         assertNull(row.errorMessage)
 
         dao.adoptServerIdentity(
+            userId = "test-user",
             localId = "local-assistant-uuid",
             serverId = "server-assistant-uuid",
             status = "completed",
             syncVersion = 9,
             serverUpdatedAt = 1234
         )
-        row = dao.getMessagesByConversation("conversation-uuid").first().single()
+        row = dao.getMessagesByConversation("test-user", "conversation-uuid").first().single()
         assertEquals("server-assistant-uuid", row.id)
         assertEquals("completed", row.status)
         assertEquals(9L, row.syncVersion)
@@ -85,15 +91,17 @@ class MessageTerminalStateTest {
         assertFalse(row.isPartial)
 
         dao.markTerminal(
+            userId = "test-user",
             messageId = "server-assistant-uuid",
             content = "",
             status = "failed",
             isPartial = false,
             errorMessage = "server failed"
         )
-        row = dao.getMessagesByConversation("conversation-uuid").first().single()
-        assertEquals("failed", row.status)
+        row = dao.getMessagesByConversation("test-user", "conversation-uuid").first().single()
+        // A late local callback must not downgrade an authoritative server completion.
+        assertEquals("completed", row.status)
         assertFalse(row.isPartial)
-        assertEquals("server failed", row.errorMessage)
+        assertNull(row.errorMessage)
     }
 }

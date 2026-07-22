@@ -2,11 +2,16 @@ package com.labsage.app.data.repository
 
 import android.net.Uri
 import com.labsage.app.LabSageApplication
+import com.labsage.app.data.auth.AuthenticationState
+import com.labsage.app.data.local.AppDatabase
 import com.labsage.app.data.local.dao.ConversationDao
 import com.labsage.app.data.local.dao.MessageDao
 import com.labsage.app.data.local.entity.ConversationEntity
 import com.labsage.app.data.local.entity.MessageEntity
 import com.labsage.app.data.remote.*
+import com.labsage.app.data.sync.HistoryRemoteSource
+import com.labsage.app.data.sync.HistorySyncCoordinator
+import com.labsage.app.data.sync.RoomHistorySyncStore
 import kotlinx.coroutines.flow.Flow
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -28,22 +33,46 @@ import java.util.UUID
  */
 class ChatRepository(
     private val app: LabSageApplication,
+    database: AppDatabase,
     private val conversationDao: ConversationDao,
     private val messageDao: MessageDao
 ) {
+    private val historySyncStore = RoomHistorySyncStore(database)
+    private val historySyncCoordinator = HistorySyncCoordinator(
+        remote = object : HistoryRemoteSource {
+            override suspend fun getConversations(): List<ConversationDto> {
+                val response = app.api.getConversations()
+                return response.data?.items ?: error(response.message)
+            }
+
+            override suspend fun getMessages(conversationId: String): List<MessageDto> {
+                val response = app.api.getMessages(conversationId)
+                return response.data?.items ?: error(response.message)
+            }
+        },
+        local = historySyncStore
+    )
     // ============================================================
     // Local queries (observable Room Flows)
     // ============================================================
 
     fun getAllConversations(): Flow<List<ConversationEntity>> =
-        conversationDao.getAllConversations()
+        conversationDao.getAllConversations(currentUserId())
 
     /** Title-substring search across conversations (pinned-first ordering). */
     fun searchConversations(query: String): Flow<List<ConversationEntity>> =
-        conversationDao.searchConversations(query)
+        conversationDao.searchConversations(currentUserId(), query)
 
     fun getMessages(conversationId: String): Flow<List<MessageEntity>> =
-        messageDao.getMessagesByConversation(conversationId)
+        messageDao.getMessagesByConversation(currentUserId(), conversationId)
+
+    suspend fun syncConversations(): Result<Unit> = runCatching {
+        historySyncCoordinator.syncConversations(currentUserId())
+    }
+
+    suspend fun syncMessages(conversationId: String): Result<Unit> = runCatching {
+        historySyncCoordinator.syncMessages(currentUserId(), conversationId)
+    }
 
     // ============================================================
     // Chat operations
@@ -179,7 +208,8 @@ class ChatRepository(
         clientRequestId: String = UUID.randomUUID().toString(),
         clientCreatedAt: Long = System.currentTimeMillis()
     ): String {
-        messageDao.insert(
+        messageDao.insertOwned(
+            currentUserId(),
             MessageEntity(
                 id = messageId,
                 conversationId = conversationId,
@@ -204,11 +234,12 @@ class ChatRepository(
         isPartial: Boolean = false,
         originalQuestion: String? = null,
         errorMessage: String? = null,
-        clientRequestId: String? = null,
+        clientRequestId: String,
         status: String = if (isPartial) "streaming" else "completed"
     ): String {
         val messageId = UUID.randomUUID().toString()
-        messageDao.insert(
+        return messageDao.insertOrReuseAssistantOwned(
+            currentUserId(),
             MessageEntity(
                 id = messageId,
                 conversationId = conversationId,
@@ -222,12 +253,11 @@ class ChatRepository(
                 clientRequestId = clientRequestId
             )
         )
-        return messageId
     }
 
     /** Update streaming content in-place (called on each SSE 'message' chunk) */
     suspend fun updateAssistantMessage(messageId: String, content: String, isPartial: Boolean) {
-        messageDao.updateContent(messageId, content, isPartial)
+        messageDao.updateContent(currentUserId(), messageId, content, isPartial)
     }
 
     suspend fun markAssistantTerminal(
@@ -237,6 +267,7 @@ class ChatRepository(
         errorMessage: String?
     ) {
         messageDao.markTerminal(
+            userId = currentUserId(),
             messageId = messageId,
             content = content,
             status = status,
@@ -246,16 +277,17 @@ class ChatRepository(
     }
 
     suspend fun markAssistantStreaming(messageId: String) {
-        messageDao.markStreaming(messageId)
+        messageDao.markStreaming(currentUserId(), messageId)
     }
 
     /** Mark a streamed message as complete */
     suspend fun finalizeAssistantMessage(messageId: String, content: String, route: String?) {
-        messageDao.finalizeMessage(messageId, content, route)
+        messageDao.finalizeMessage(currentUserId(), messageId, content, route)
     }
 
     suspend fun adoptServerMessageIdentity(localId: String, event: SseEvent.Done) {
         messageDao.adoptServerIdentity(
+            userId = currentUserId(),
             localId = localId,
             serverId = event.assistantMessageId,
             status = event.status,
@@ -269,7 +301,8 @@ class ChatRepository(
         question: String,
         clientRequestId: String
     ): String {
-        messageDao.insert(
+        return messageDao.mergeTerminalOwned(
+            currentUserId(),
             MessageEntity(
                 id = event.assistantMessageId,
                 conversationId = event.conversationId,
@@ -283,43 +316,47 @@ class ChatRepository(
                 serverUpdatedAt = event.updatedAt
             )
         )
-        return event.assistantMessageId
     }
 
     suspend fun upsertConversation(conversationId: String, title: String) {
-        val existing = conversationDao.getById(conversationId)
+        val userId = currentUserId()
+        val existing = conversationDao.getById(userId, conversationId)
         if (existing != null) {
             // Use UPDATE to avoid FK CASCADE from REPLACE
-            conversationDao.updateMeta(conversationId, title, System.currentTimeMillis())
+            conversationDao.updateMeta(userId, conversationId, title, System.currentTimeMillis())
         } else {
             // Fresh insert — IGNORE conflict (safe, no cascade risk)
-            conversationDao.insert(
+            val inserted = conversationDao.insert(
                 ConversationEntity(
                     id = conversationId,
                     title = title,
                     createdAt = System.currentTimeMillis(),
-                    updatedAt = System.currentTimeMillis()
+                    updatedAt = System.currentTimeMillis(),
+                    ownerUserId = userId
                 )
             )
+            check(inserted != -1L || conversationDao.getById(userId, conversationId) != null) {
+                "Conversation ID belongs to a different local account"
+            }
         }
     }
 
     suspend fun deleteConversation(conversationId: String) {
-        conversationDao.deleteById(conversationId)
+        conversationDao.deleteById(currentUserId(), conversationId)
     }
 
     /** Pin or unpin a conversation (pinned ones sort to the top). */
     suspend fun setConversationPinned(conversationId: String, pinned: Boolean) {
-        conversationDao.setPinned(conversationId, pinned)
+        conversationDao.setPinned(currentUserId(), conversationId, pinned)
     }
 
     /** Rename a conversation without changing its updated_at (no reordering). */
     suspend fun renameConversation(conversationId: String, newTitle: String) {
-        conversationDao.updateTitle(conversationId, newTitle.trim())
+        conversationDao.updateTitle(currentUserId(), conversationId, newTitle.trim())
     }
 
     suspend fun deleteMessage(messageId: String) {
-        messageDao.deleteById(messageId)
+        messageDao.deleteById(currentUserId(), messageId)
     }
 
     // ============================================================
@@ -361,5 +398,10 @@ class ChatRepository(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    private fun currentUserId(): String {
+        return (app.authRepository.state.value as? AuthenticationState.Authenticated)?.user?.id
+            ?: error("History access requires an authenticated user")
     }
 }

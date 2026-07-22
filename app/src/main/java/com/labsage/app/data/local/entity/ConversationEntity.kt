@@ -2,6 +2,7 @@ package com.labsage.app.data.local.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
@@ -10,7 +11,10 @@ import androidx.room.PrimaryKey
  * Maps 1:1 to the backend's session Id concept.
  * Title is derived from the first user message (first 30 chars, matching the web frontend).
  */
-@Entity(tableName = "conversations")
+@Entity(
+    tableName = "conversations",
+    indices = [Index("owner_user_id")]
+)
 data class ConversationEntity(
     @PrimaryKey
     val id: String,
@@ -37,5 +41,9 @@ data class ConversationEntity(
 
     /** Local tombstone mirrored from the server during sync. */
     @ColumnInfo(name = "is_deleted")
-    val isDeleted: Boolean = false
+    val isDeleted: Boolean = false,
+
+    /** Authenticated account that owns this cached conversation; null only for unclaimed legacy rows. */
+    @ColumnInfo(name = "owner_user_id")
+    val ownerUserId: String? = null
 )

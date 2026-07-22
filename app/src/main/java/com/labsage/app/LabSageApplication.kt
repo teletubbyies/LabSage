@@ -216,6 +216,7 @@ class LabSageApplication : Application() {
         Room.databaseBuilder(this, AppDatabase::class.java, "labsage.db")
             .addMigrations(AppDatabase.MIGRATION_1_2)
             .addMigrations(AppDatabase.MIGRATION_2_3)
+            .addMigrations(AppDatabase.MIGRATION_3_4)
             .build()
     }
 
@@ -226,6 +227,7 @@ class LabSageApplication : Application() {
     val repository: ChatRepository by lazy {
         ChatRepository(
             app = this,
+            database = database,
             conversationDao = database.conversationDao(),
             messageDao = database.messageDao()
         )

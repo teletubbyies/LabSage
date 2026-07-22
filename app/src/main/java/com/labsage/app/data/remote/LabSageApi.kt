@@ -16,6 +16,12 @@ interface LabSageApi {
     @POST("api/chat")
     suspend fun chat(@Body request: ChatRequest): ApiResponse<ChatData>
 
+    @GET("api/conversations")
+    suspend fun getConversations(): ApiResponse<ConversationListData>
+
+    @GET("api/conversations/{id}/messages")
+    suspend fun getMessages(@Path("id") conversationId: String): ApiResponse<MessageListData>
+
     /** File upload to knowledge base — POST /api/upload */
     @Multipart
     @POST("api/upload")

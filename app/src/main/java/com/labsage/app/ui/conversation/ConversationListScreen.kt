@@ -28,6 +28,7 @@ import com.labsage.app.LabSageApplication
 import com.labsage.app.R
 import com.labsage.app.data.local.entity.ConversationEntity
 import com.labsage.app.ui.chat.components.BrandMark
+import com.labsage.app.ui.chat.components.SyncStatusBanner
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -44,6 +45,7 @@ fun ConversationListScreen(
     val viewModel: ConversationListViewModel = viewModel(factory = app.conversationListViewModelFactory)
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val syncState by viewModel.syncState.collectAsStateWithLifecycle()
 
     val scheme = MaterialTheme.colorScheme
     val isSearching = searchQuery.isNotBlank()
@@ -103,6 +105,7 @@ fun ConversationListScreen(
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            SyncStatusBanner(syncState, viewModel::refreshConversations)
             // Search bar — filled, rounded, always visible.
             OutlinedTextField(
                 value = searchQuery,
