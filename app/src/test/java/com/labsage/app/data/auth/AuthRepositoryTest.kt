@@ -89,6 +89,51 @@ class AuthRepositoryTest {
     }
 
     @Test
+    fun `bound operation refreshes expired access token for the same identity`() = runTest {
+        val expiredAccess = session(accessToken = "expired", expiresAt = 10_000).copy(
+            tokens = session(expiresAt = 10_000).tokens.copy(accessExpiresAt = 999)
+        )
+        val api = FakeAuthApi().apply {
+            nextSession = session(accessToken = "fresh", expiresAt = 20_000)
+        }
+        val store = InMemoryAuthSessionStore(expiredAccess)
+        val repository = repository(api, store)
+
+        val refreshed = repository.sessionForBoundOperation("user-1", baseUrl)
+
+        assertEquals("fresh", refreshed?.tokens?.accessToken)
+        assertEquals(1, api.refreshCalls)
+        assertEquals("fresh", store.load()?.tokens?.accessToken)
+    }
+
+    @Test
+    fun `bound refresh cannot overwrite a concurrently switched account`() = runTest {
+        val expiredAccess = session(accessToken = "expired", expiresAt = 10_000).copy(
+            tokens = session(expiresAt = 10_000).tokens.copy(accessExpiresAt = 999)
+        )
+        val store = InMemoryAuthSessionStore(expiredAccess)
+        val api = FakeAuthApi().apply {
+            nextSession = session(accessToken = "stale-refresh", expiresAt = 20_000)
+            onRefresh = {
+                val bob = session(accessToken = "bob-token", expiresAt = 20_000)
+                store.save(
+                    bob.copy(
+                        user = AuthUser("user-2", "bob"),
+                        tokens = bob.tokens.copy(refreshToken = "bob-refresh")
+                    )
+                )
+            }
+        }
+        val repository = repository(api, store)
+
+        val refreshed = repository.sessionForBoundOperation("user-1", baseUrl)
+
+        assertNull(refreshed)
+        assertEquals("user-2", store.load()?.user?.id)
+        assertEquals("bob-token", store.load()?.tokens?.accessToken)
+    }
+
+    @Test
     fun `logout clears local state even when backend is unavailable`() = runTest {
         val api = FakeAuthApi().apply { logoutFailure = IOException("offline") }
         val store = InMemoryAuthSessionStore(session(expiresAt = 9_999))
@@ -127,6 +172,22 @@ private class InMemoryAuthSessionStore(initial: AuthSession? = null) : AuthSessi
     override fun load(): AuthSession? = session
     override fun save(session: AuthSession) { this.session = session }
     override fun clear() { session = null }
+    @Synchronized
+    override fun saveIfCurrent(expected: AuthSession, session: AuthSession): Boolean {
+        if (!sameSession(this.session, expected)) return false
+        this.session = session
+        return true
+    }
+    @Synchronized
+    override fun clearIfCurrent(expected: AuthSession): Boolean {
+        if (!sameSession(session, expected)) return false
+        session = null
+        return true
+    }
+    private fun sameSession(current: AuthSession?, expected: AuthSession): Boolean =
+        current != null && current.user.id == expected.user.id &&
+            current.serverBaseUrl == expected.serverBaseUrl &&
+            current.tokens.refreshToken == expected.tokens.refreshToken
 }
 
 private class FakeAuthApi : AuthApi {
@@ -138,11 +199,13 @@ private class FakeAuthApi : AuthApi {
     var refreshFailure: Exception? = null
     var logoutFailure: Exception? = null
     var lastRequestedBaseUrl: String? = null
+    var onRefresh: (() -> Unit)? = null
 
     override suspend fun register(credentials: AuthCredentials) = ApiResponse("OK", nextSession)
     override suspend fun login(credentials: AuthCredentials) = ApiResponse("OK", nextSession)
     override suspend fun refresh(request: RefreshTokenRequest): ApiResponse<AuthSession> {
         refreshCalls++
+        onRefresh?.invoke()
         refreshFailure?.let { throw it }
         return ApiResponse("OK", nextSession)
     }

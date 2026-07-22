@@ -103,6 +103,20 @@ private class HttpTestStore(initial: AuthSession?) : AuthSessionStore {
     override fun load(): AuthSession? = value
     override fun save(session: AuthSession) { value = session }
     override fun clear() { value = null }
+    override fun saveIfCurrent(expected: AuthSession, session: AuthSession): Boolean {
+        if (!sameSession(value, expected)) return false
+        value = session
+        return true
+    }
+    override fun clearIfCurrent(expected: AuthSession): Boolean {
+        if (!sameSession(value, expected)) return false
+        value = null
+        return true
+    }
+    private fun sameSession(current: AuthSession?, expected: AuthSession): Boolean =
+        current != null && current.user.id == expected.user.id &&
+            current.serverBaseUrl == expected.serverBaseUrl &&
+            current.tokens.refreshToken == expected.tokens.refreshToken
 }
 
 private class HttpFakeAuthApi : AuthApi {

@@ -22,6 +22,9 @@ interface LabSageApi {
     @GET("api/conversations/{id}/messages")
     suspend fun getMessages(@Path("id") conversationId: String): ApiResponse<MessageListData>
 
+    @POST("api/sync/import")
+    suspend fun importLegacyHistory(@Body request: LegacyImportRequest): ApiResponse<LegacyImportData>
+
     /** File upload to knowledge base — POST /api/upload */
     @Multipart
     @POST("api/upload")

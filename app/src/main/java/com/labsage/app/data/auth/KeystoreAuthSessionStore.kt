@@ -54,6 +54,25 @@ class KeystoreAuthSessionStore(
         cacheLoaded = true
     }
 
+    @Synchronized
+    override fun saveIfCurrent(expected: AuthSession, session: AuthSession): Boolean {
+        if (!sameSession(load(), expected)) return false
+        save(session)
+        return true
+    }
+
+    @Synchronized
+    override fun clearIfCurrent(expected: AuthSession): Boolean {
+        if (!sameSession(load(), expected)) return false
+        clear()
+        return true
+    }
+
+    private fun sameSession(current: AuthSession?, expected: AuthSession): Boolean =
+        current != null && current.user.id == expected.user.id &&
+            current.serverBaseUrl == expected.serverBaseUrl &&
+            current.tokens.refreshToken == expected.tokens.refreshToken
+
     private fun encrypt(plaintext: String): String {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, secretKey())

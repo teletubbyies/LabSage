@@ -22,7 +22,8 @@ class AuthRepository(
     private val baseUrlProvider: () -> String,
     private val nowMillis: () -> Long = System::currentTimeMillis
 ) : AuthGateway {
-    private val refreshMutex = Mutex()
+    /** Serializes every auth-session mutation; the store CAS also protects external writers. */
+    private val sessionMutationMutex = Mutex()
     private val _state = MutableStateFlow<AuthenticationState>(AuthenticationState.Initializing)
     override val state: StateFlow<AuthenticationState> = _state.asStateFlow()
 
@@ -48,8 +49,8 @@ class AuthRepository(
 
     private suspend fun authenticate(
         call: suspend () -> Pair<String, com.labsage.app.data.remote.ApiResponse<AuthSession>>
-    ): Result<Unit> {
-        return runCatching {
+    ): Result<Unit> = sessionMutationMutex.withLock {
+        runCatching {
             val (baseUrl, response) = call()
             val session = (response.data ?: error(response.message)).copy(serverBaseUrl = baseUrl)
             sessionStore.save(session)
@@ -58,7 +59,7 @@ class AuthRepository(
     }
 
     /** Called by OkHttp Authenticator. The failed token prevents redundant concurrent refreshes. */
-    suspend fun refreshAfterUnauthorized(failedAccessToken: String, requestUrl: HttpUrl): Boolean = refreshMutex.withLock {
+    suspend fun refreshAfterUnauthorized(failedAccessToken: String, requestUrl: HttpUrl): Boolean = sessionMutationMutex.withLock {
         val current = sessionStore.load()
         if (current == null) {
             expireSession()
@@ -72,17 +73,21 @@ class AuthRepository(
             return true
         }
         if (current.tokens.refreshExpiresAt <= nowMillis()) {
-            expireSession()
+            if (sessionStore.clearIfCurrent(current)) {
+                _state.value = AuthenticationState.Unauthenticated
+            }
             return false
         }
         return try {
             val response = apiProvider(serverBaseUrl).refresh(RefreshTokenRequest(current.tokens.refreshToken))
             val refreshed = (response.data ?: error(response.message)).copy(serverBaseUrl = serverBaseUrl)
-            sessionStore.save(refreshed)
+            if (!sessionStore.saveIfCurrent(current, refreshed)) return false
             _state.value = AuthenticationState.Authenticated(refreshed.user)
             true
         } catch (_: Exception) {
-            expireSession()
+            if (sessionStore.clearIfCurrent(current)) {
+                _state.value = AuthenticationState.Unauthenticated
+            }
             false
         }
     }
@@ -95,7 +100,51 @@ class AuthRepository(
 
     fun sessionBaseUrl(): String? = sessionStore.load()?.serverBaseUrl
 
-    override suspend fun logout() {
+    /** Immutable credentials snapshot for operations that must not follow an account switch. */
+    fun sessionSnapshot(): AuthSession? = sessionStore.load()
+
+    /**
+     * Returns a usable token only while the same user remains bound to the same
+     * backend. Refresh is allowed inside that identity, but a concurrent account
+     * or backend switch invalidates the operation instead of lending it new creds.
+     */
+    suspend fun sessionForBoundOperation(
+        userId: String,
+        serverBaseUrl: String,
+        forceRefresh: Boolean = false
+    ): AuthSession? = sessionMutationMutex.withLock {
+        val initial = sessionStore.load()?.takeIf { it.matchesBinding(userId, serverBaseUrl) }
+            ?: return@withLock null
+        if (!forceRefresh && initial.tokens.accessExpiresAt > nowMillis()) {
+            return@withLock initial
+        }
+        if (initial.tokens.refreshExpiresAt <= nowMillis()) {
+            if (sessionStore.clearIfCurrent(initial)) {
+                _state.value = AuthenticationState.Unauthenticated
+            }
+            return@withLock null
+        }
+        try {
+            val response = apiProvider(serverBaseUrl).refresh(
+                RefreshTokenRequest(initial.tokens.refreshToken)
+            )
+            val refreshed = (response.data ?: error(response.message)).copy(
+                serverBaseUrl = serverBaseUrl
+            )
+            if (refreshed.user.id != userId || !sessionStore.saveIfCurrent(initial, refreshed)) {
+                return@withLock null
+            }
+            _state.value = AuthenticationState.Authenticated(refreshed.user)
+            refreshed
+        } catch (_: Exception) {
+            if (sessionStore.clearIfCurrent(initial)) {
+                _state.value = AuthenticationState.Unauthenticated
+            }
+            null
+        }
+    }
+
+    override suspend fun logout() = sessionMutationMutex.withLock {
         val refreshToken = sessionStore.load()?.tokens?.refreshToken
         try {
             val baseUrl = sessionStore.load()?.serverBaseUrl
@@ -129,4 +178,8 @@ class AuthRepository(
 
     private fun sameOrigin(first: HttpUrl, second: HttpUrl): Boolean =
         first.scheme == second.scheme && first.host == second.host && first.port == second.port
+
+    private fun AuthSession.matchesBinding(userId: String, serverBaseUrl: String): Boolean =
+        user.id == userId && this.serverBaseUrl == serverBaseUrl
+
 }

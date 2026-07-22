@@ -9,6 +9,7 @@ import com.labsage.app.data.auth.AccessTokenAuthenticator
 import com.labsage.app.data.auth.AccessTokenInterceptor
 import com.labsage.app.data.auth.AuthApi
 import com.labsage.app.data.auth.AuthRepository
+import com.labsage.app.data.auth.AuthSession
 import com.labsage.app.data.auth.BackendSwitchCoordinator
 import com.labsage.app.data.auth.KeystoreAuthSessionStore
 import com.labsage.app.ui.auth.AuthViewModel
@@ -204,6 +205,34 @@ class LabSageApplication : Application() {
 
     /** Current [LabSageApi] for the active base URL. */
     val api: LabSageApi get() = networkLayerFor(currentBaseUrl).api
+
+    /**
+     * A non-refreshing client pinned to one authenticated session. Legacy import
+     * must never follow a concurrent backend/account switch through dynamic DI.
+     */
+    fun legacyImportApiFor(session: AuthSession): LabSageApi {
+        val base = normalizeBaseUrl(
+            session.serverBaseUrl ?: error("Authenticated session has no server binding")
+        )
+        val fixedClient = baseOkHttpClient.newBuilder()
+            .addInterceptor { chain ->
+                chain.proceed(
+                    chain.request().newBuilder()
+                        .header("Authorization", "Bearer ${session.tokens.accessToken}")
+                        .build()
+                )
+            }
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .build()
+        return Retrofit.Builder()
+            .baseUrl(base)
+            .client(fixedClient)
+            .addConverterFactory(GsonConverterFactory.create(gson))
+            .build()
+            .create(LabSageApi::class.java)
+    }
 
     /** Current [SseDataSource] for the active base URL. */
     val sseDataSource: SseDataSource get() = networkLayerFor(currentBaseUrl).sse

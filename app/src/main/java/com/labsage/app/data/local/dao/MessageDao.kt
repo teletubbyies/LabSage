@@ -48,6 +48,14 @@ interface MessageDao {
     )
     suspend fun findForeignOwnedIds(userId: String, ids: List<String>): List<String>
 
+    @Query(
+        "SELECT messages.* FROM messages INNER JOIN conversations " +
+            "ON conversations.id = messages.conversation_id " +
+            "WHERE conversations.owner_user_id = :userId AND messages.sync_version = 0 " +
+            "AND messages.is_deleted = 0 ORDER BY messages.timestamp ASC, messages.id ASC"
+    )
+    suspend fun getLocalOnlyForImport(userId: String): List<MessageEntity>
+
     @Transaction
     suspend fun upsertOwned(userId: String, message: MessageEntity) {
         check(isConversationOwned(userId, message.conversationId)) {

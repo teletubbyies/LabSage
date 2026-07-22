@@ -36,6 +36,12 @@ interface ConversationDao {
     )
     suspend fun findForeignOwnedIds(userId: String, ids: List<String>): List<String>
 
+    @Query(
+        "SELECT * FROM conversations WHERE owner_user_id = :userId " +
+            "AND sync_version = 0 AND is_deleted = 0 ORDER BY created_at ASC, id ASC"
+    )
+    suspend fun getLocalOnlyForImport(userId: String): List<ConversationEntity>
+
     /** Delete a conversation (cascades to messages via FK) */
     @Query("DELETE FROM conversations WHERE id = :conversationId AND owner_user_id = :userId")
     suspend fun deleteById(userId: String, conversationId: String)

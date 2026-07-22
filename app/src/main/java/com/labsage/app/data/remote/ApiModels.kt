@@ -190,6 +190,39 @@ data class MessageDto(
     @SerializedName("updatedAt") val updatedAt: Long
 )
 
+data class LegacyImportRequest(
+    @SerializedName("conversations") val conversations: List<LegacyConversationDto>,
+    @SerializedName("messages") val messages: List<LegacyMessageDto>
+)
+
+data class LegacyConversationDto(
+    @SerializedName("id") val id: String,
+    @SerializedName("title") val title: String,
+    @SerializedName("isPinned") val isPinned: Boolean,
+    @SerializedName("createdAt") val createdAt: Long,
+    @SerializedName("updatedAt") val updatedAt: Long
+)
+
+data class LegacyMessageDto(
+    @SerializedName("id") val id: String,
+    @SerializedName("conversationId") val conversationId: String,
+    @SerializedName("role") val role: String,
+    @SerializedName("content") val content: String,
+    @SerializedName("status") val status: String,
+    @SerializedName("route") val route: String? = null,
+    @SerializedName("originalQuestion") val originalQuestion: String? = null,
+    @SerializedName("errorMessage") val errorMessage: String? = null,
+    @SerializedName("clientRequestId") val clientRequestId: String? = null,
+    @SerializedName("clientCreatedAt") val clientCreatedAt: Long,
+    @SerializedName("createdAt") val createdAt: Long,
+    @SerializedName("updatedAt") val updatedAt: Long
+)
+
+data class LegacyImportData(
+    @SerializedName("importedConversations") val importedConversations: Int,
+    @SerializedName("importedMessages") val importedMessages: Int
+)
+
 // ============================================================
 // Session context (summary + facts) — GET/PUT /api/session/context
 // ============================================================

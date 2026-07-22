@@ -5,11 +5,49 @@ import com.labsage.app.data.local.AppDatabase
 import com.labsage.app.data.local.entity.ConversationEntity
 import com.labsage.app.data.local.entity.MessageEntity
 import com.labsage.app.data.remote.ConversationDto
+import com.labsage.app.data.remote.LegacyConversationDto
+import com.labsage.app.data.remote.LegacyImportRequest
+import com.labsage.app.data.remote.LegacyMessageDto
 import com.labsage.app.data.remote.MessageDto
 
 class RoomHistorySyncStore(
     private val database: AppDatabase
 ) {
+    suspend fun legacyImportSnapshot(userId: String): LegacyImportRequest =
+        database.withTransaction {
+            database.conversationDao().claimLegacyRows(userId)
+            val conversations = database.conversationDao().getLocalOnlyForImport(userId)
+            val messages = database.messageDao().getLocalOnlyForImport(userId)
+            LegacyImportRequest(
+                conversations = conversations.map {
+                    LegacyConversationDto(
+                        id = it.id,
+                        title = it.title,
+                        isPinned = it.isPinned,
+                        createdAt = it.createdAt,
+                        updatedAt = it.updatedAt
+                    )
+                },
+                messages = messages.map {
+                    val normalized = it.normalizedForLegacyImport()
+                    LegacyMessageDto(
+                        id = normalized.id,
+                        conversationId = normalized.conversationId,
+                        role = normalized.role,
+                        content = normalized.content,
+                        status = normalized.status,
+                        route = normalized.route,
+                        originalQuestion = normalized.originalQuestion,
+                        errorMessage = normalized.errorMessage,
+                        clientRequestId = normalized.clientRequestId,
+                        clientCreatedAt = normalized.clientCreatedAt,
+                        createdAt = normalized.timestamp,
+                        updatedAt = normalized.serverUpdatedAt ?: normalized.timestamp
+                    )
+                }
+            )
+        }
+
     suspend fun claimLegacyConversations(userId: String) {
         database.withTransaction {
             database.conversationDao().claimLegacyRows(userId)
@@ -117,6 +155,17 @@ class RoomHistorySyncStore(
         serverUpdatedAt = updatedAt,
         isDeleted = false
     )
+
+    private fun MessageEntity.normalizedForLegacyImport(): MessageEntity = when {
+        role == "user" -> copy(status = "completed", isPartial = false, errorMessage = null)
+        status != "pending" && status != "streaming" -> this
+        content.isNotBlank() -> copy(status = "partial", isPartial = true)
+        else -> copy(
+            status = "failed",
+            isPartial = false,
+            errorMessage = errorMessage ?: "Imported interrupted generation"
+        )
+    }
 
     private companion object {
         const val SQLITE_SAFE_BATCH_SIZE = 500

@@ -7,6 +7,7 @@ import com.google.gson.Gson
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -46,4 +47,36 @@ class KeystoreAuthSessionStoreTest {
         val restoredByNewProcessLikeStore = KeystoreAuthSessionStore(context, Gson()).load()
         assertEquals(session, restoredByNewProcessLikeStore)
     }
+
+    @Test
+    fun compareAndSetCannotOverwriteOrClearASwitchedAccount() {
+        val alice = session("user-a", "alice", "alice-refresh", "alice-access")
+        val refreshedAlice = alice.copy(
+            tokens = alice.tokens.copy(accessToken = "alice-refreshed")
+        )
+        val bob = session("user-b", "bob", "bob-refresh", "bob-access")
+        store.save(alice)
+
+        assertTrue(store.saveIfCurrent(alice, refreshedAlice))
+        store.save(bob)
+        assertFalse(store.saveIfCurrent(refreshedAlice, alice))
+        assertFalse(store.clearIfCurrent(refreshedAlice))
+        assertEquals(bob, store.load())
+    }
+
+    private fun session(
+        userId: String,
+        username: String,
+        refreshToken: String,
+        accessToken: String
+    ) = AuthSession(
+        user = AuthUser(userId, username),
+        tokens = AuthTokens(
+            accessToken = accessToken,
+            refreshToken = refreshToken,
+            accessExpiresAt = Long.MAX_VALUE - 1,
+            refreshExpiresAt = Long.MAX_VALUE
+        ),
+        serverBaseUrl = "https://private-backend.example/"
+    )
 }

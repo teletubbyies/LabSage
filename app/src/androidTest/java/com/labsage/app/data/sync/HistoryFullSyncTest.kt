@@ -95,6 +95,71 @@ class HistoryFullSyncTest {
     }
 
     @Test
+    fun legacyImportSnapshotClaimsRowsAndKeepsOnlyUnsyncedHistory() = runBlocking {
+        val conversations = database.conversationDao()
+        val messages = database.messageDao()
+        conversations.insert(conversation("legacy-conversation", owner = null, syncVersion = 0))
+        conversations.insert(conversation("server-conversation", "user-a", syncVersion = 3))
+        messages.insert(
+            MessageEntity(
+                id = "legacy-message",
+                conversationId = "legacy-conversation",
+                role = "user",
+                content = "legacy question",
+                status = "completed",
+                clientRequestId = null,
+                clientCreatedAt = 123,
+                timestamp = 120,
+                syncVersion = 0
+            )
+        )
+        messages.insert(
+            MessageEntity(
+                id = "legacy-streaming-assistant",
+                conversationId = "legacy-conversation",
+                role = "assistant",
+                content = "recoverable partial",
+                status = "streaming",
+                isPartial = true,
+                originalQuestion = "legacy question",
+                clientRequestId = "legacy-stream-request",
+                syncVersion = 0
+            )
+        )
+        messages.insertOwned(
+            "user-a",
+            MessageEntity(
+                id = "server-message",
+                conversationId = "server-conversation",
+                role = "assistant",
+                content = "already synced",
+                syncVersion = 4
+            )
+        )
+
+        val snapshot = store.legacyImportSnapshot("user-a")
+
+        assertEquals(listOf("legacy-conversation"), snapshot.conversations.map { it.id })
+        assertEquals(
+            setOf("legacy-message", "legacy-streaming-assistant"),
+            snapshot.messages.map { it.id }.toSet()
+        )
+        assertTrue(snapshot.messages.all { it.conversationId == "legacy-conversation" })
+        assertEquals(
+            "partial",
+            snapshot.messages.single { it.id == "legacy-streaming-assistant" }.status
+        )
+        assertEquals(
+            123L,
+            snapshot.messages.single { it.id == "legacy-message" }.clientCreatedAt
+        )
+        assertEquals(
+            "user-a",
+            conversations.getById("user-a", "legacy-conversation")?.ownerUserId
+        )
+    }
+
+    @Test
     fun directDeepLinkIntoEmptyRoomSyncsParentBeforeMessages() = runBlocking {
         var conversationCalls = 0
         var messageCalls = 0

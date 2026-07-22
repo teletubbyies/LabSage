@@ -11,11 +11,17 @@ import com.labsage.app.data.local.entity.MessageEntity
 import com.labsage.app.data.remote.*
 import com.labsage.app.data.sync.HistoryRemoteSource
 import com.labsage.app.data.sync.HistorySyncCoordinator
+import com.labsage.app.data.sync.DataStoreLegacyImportCompletionStore
+import com.labsage.app.data.sync.LegacyHistoryImportCoordinator
+import com.labsage.app.data.sync.LegacyImportBinding
+import com.labsage.app.data.sync.LegacyImportLocalSource
+import com.labsage.app.data.sync.LegacyImportRemoteSource
 import com.labsage.app.data.sync.RoomHistorySyncStore
 import kotlinx.coroutines.flow.Flow
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import retrofit2.HttpException
 import java.io.File
 import java.util.UUID
 
@@ -38,6 +44,28 @@ class ChatRepository(
     private val messageDao: MessageDao
 ) {
     private val historySyncStore = RoomHistorySyncStore(database)
+    private val legacyImportCoordinator = LegacyHistoryImportCoordinator(
+        remote = LegacyImportRemoteSource { binding, request ->
+            check(isLegacyImportBindingCurrent(binding))
+            var session = app.authRepository.sessionForBoundOperation(
+                binding.userId, binding.serverKey
+            )
+                ?: error("Authentication changed during legacy import")
+            val response = try {
+                app.legacyImportApiFor(session).importLegacyHistory(request)
+            } catch (error: HttpException) {
+                if (error.code() != 401) throw error
+                session = app.authRepository.sessionForBoundOperation(
+                    binding.userId, binding.serverKey, forceRefresh = true
+                ) ?: error("Authentication changed during legacy import")
+                app.legacyImportApiFor(session).importLegacyHistory(request)
+            }
+            response.data ?: error(response.message)
+        },
+        local = LegacyImportLocalSource(historySyncStore::legacyImportSnapshot),
+        completionStore = DataStoreLegacyImportCompletionStore(app),
+        isBindingCurrent = ::isLegacyImportBindingCurrent
+    )
     private val historySyncCoordinator = HistorySyncCoordinator(
         remote = object : HistoryRemoteSource {
             override suspend fun getConversations(): List<ConversationDto> {
@@ -67,11 +95,15 @@ class ChatRepository(
         messageDao.getMessagesByConversation(currentUserId(), conversationId)
 
     suspend fun syncConversations(): Result<Unit> = runCatching {
-        historySyncCoordinator.syncConversations(currentUserId())
+        val binding = currentLegacyImportBinding()
+        legacyImportCoordinator.ensureImported(binding)
+        historySyncCoordinator.syncConversations(binding.userId)
     }
 
     suspend fun syncMessages(conversationId: String): Result<Unit> = runCatching {
-        historySyncCoordinator.syncMessages(currentUserId(), conversationId)
+        val binding = currentLegacyImportBinding()
+        legacyImportCoordinator.ensureImported(binding)
+        historySyncCoordinator.syncMessages(binding.userId, conversationId)
     }
 
     // ============================================================
@@ -403,5 +435,21 @@ class ChatRepository(
     private fun currentUserId(): String {
         return (app.authRepository.state.value as? AuthenticationState.Authenticated)?.user?.id
             ?: error("History access requires an authenticated user")
+    }
+
+    private fun currentLegacyImportBinding(): LegacyImportBinding {
+        val session = app.authRepository.sessionSnapshot()
+            ?: error("Legacy import requires an authenticated server session")
+        return LegacyImportBinding(
+            userId = session.user.id,
+            serverKey = session.serverBaseUrl
+                ?: error("Authenticated session has no server binding")
+        )
+    }
+
+    private fun isLegacyImportBindingCurrent(binding: LegacyImportBinding): Boolean {
+        val session = app.authRepository.sessionSnapshot() ?: return false
+        return session.user.id == binding.userId &&
+            session.serverBaseUrl == binding.serverKey
     }
 }
