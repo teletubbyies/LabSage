@@ -357,7 +357,17 @@ deleted_at          nullable tombstone
 - 重复全量同步不会重复插入。
 - Room 仍然是列表和消息 UI 的唯一数据读取源。
 
-完成状态：`pending`
+完成状态：`completed`
+
+完成记录（2026-07-22）：
+
+- Android commit：`d833737 feat(F07): sync server history into Room cache`。
+- 登录/冷启动后台全量同步会话，进入聊天后台同步消息；Compose 始终只消费账号隔离后的 Room Flow，缓存可立即展示，同步失败保留缓存并提供非阻断重试。
+- Room v4 增加 `owner_user_id` 并保留 v2→v3→v4 迁移链；legacy 缓存在联网前事务认领，跨账号会话/消息 UUID 冲突会整批回滚，避免主键覆盖导致串号。
+- 会话与消息使用事务批量 upsert 和安全分批清理；空库深链先回填父会话；重复同步幂等，本地未同步记录不会被全量清理误删。
+- SSE 与历史同步按 `clientRequestId` 归并身份，覆盖 streaming/partial/failed、同步先后顺序与进程恢复竞态；权威 completed/较新 syncVersion 不会被迟到 chunk、EOF、Done 或恢复回写降级。
+- 最终独立门禁：`review_f07_account_gate` PASS；此前各轮 FAIL 均修复后由新的独立代理复审。
+- 验证：Android 单元测试、AndroidTest 编译、Debug APK、Lint 通过；Pixel_8 模拟器 instrumentation 25/25 通过；专项 cached diff-check 确认未夹带文件管理、文档、`.gradle`、`MainActivity.kt` 等既有用户修改。
 
 ### F08：既有 Room 历史一次性导入
 
