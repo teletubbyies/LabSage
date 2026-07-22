@@ -546,6 +546,37 @@ class HistoryFullSyncTest {
     }
 
     @Test
+    fun incrementalConversationTombstoneHidesRowAndReplayIsIdempotent() = runBlocking {
+        val conversationId = "deleted-remotely"
+        database.conversationDao().insert(
+            conversation(conversationId, "user-a", 20).copy(version = 2)
+        )
+        database.messageDao().insert(
+            MessageEntity(
+                id = "kept-until-full-cleanup",
+                conversationId = conversationId,
+                role = "user",
+                content = "history",
+                syncVersion = 21
+            )
+        )
+        val tombstone = remoteConversation(conversationId, 22).copy(
+            version = 3,
+            isDeleted = true,
+            deletedAt = 300
+        )
+
+        store.mergeConversations("user-a", "server-a", listOf(tombstone))
+        store.mergeConversations("user-a", "server-a", listOf(tombstone))
+
+        assertTrue(database.conversationDao().getAllConversations("user-a").first().isEmpty())
+        val cached = database.conversationDao().getById("user-a", conversationId)
+        assertTrue(cached?.isDeleted == true)
+        assertEquals(3L, cached?.version)
+        assertEquals(22L, cached?.syncVersion)
+    }
+
+    @Test
     fun anotherAccountCannotAttachMessagesThroughAnOldDeepLink() = runBlocking {
         val conversations = database.conversationDao()
         val messages = database.messageDao()

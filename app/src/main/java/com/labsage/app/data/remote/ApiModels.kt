@@ -169,7 +169,15 @@ data class ConversationDto(
     @SerializedName("version") val version: Long,
     @SerializedName("syncVersion") val syncVersion: Long,
     @SerializedName("createdAt") val createdAt: Long,
-    @SerializedName("updatedAt") val updatedAt: Long
+    @SerializedName("updatedAt") val updatedAt: Long,
+    @SerializedName("isDeleted") val isDeleted: Boolean = false,
+    @SerializedName("deletedAt") val deletedAt: Long? = null
+)
+
+data class ConversationPatchRequest(
+    @SerializedName("title") val title: String? = null,
+    @SerializedName("isPinned") val isPinned: Boolean? = null,
+    @SerializedName("version") val version: Long
 )
 
 data class MessageListData(

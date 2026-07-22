@@ -422,26 +422,108 @@ class ChatRepository(
         }
     }
 
-    suspend fun deleteConversation(conversationId: String) {
+    suspend fun deleteConversation(conversationId: String): Result<Unit> = runCatching {
         val binding = currentLegacyImportBinding()
-        conversationDao.deleteById(binding.userId, conversationId, binding.serverKey)
+        val local = loadMutableConversation(binding, conversationId)
+        val response = try {
+            withBoundHistoryApi(binding.userId, binding.serverKey) {
+                deleteConversation(conversationId, local.version)
+            }
+        } catch (error: HttpException) {
+            refreshAfterConversationConflict(binding, error)
+            throw error
+        }
+        applyConversationMutation(binding, response.data ?: error(response.message))
     }
 
     /** Pin or unpin a conversation (pinned ones sort to the top). */
-    suspend fun setConversationPinned(conversationId: String, pinned: Boolean) {
+    suspend fun setConversationPinned(
+        conversationId: String,
+        pinned: Boolean
+    ): Result<Unit> = runCatching {
         val binding = currentLegacyImportBinding()
-        conversationDao.setPinned(binding.userId, conversationId, pinned, binding.serverKey)
+        patchConversation(binding, conversationId, title = null, isPinned = pinned)
     }
 
     /** Rename a conversation without changing its updated_at (no reordering). */
-    suspend fun renameConversation(conversationId: String, newTitle: String) {
+    suspend fun renameConversation(
+        conversationId: String,
+        newTitle: String
+    ): Result<Unit> = runCatching {
         val binding = currentLegacyImportBinding()
-        conversationDao.updateTitle(
+        patchConversation(binding, conversationId, title = newTitle.trim(), isPinned = null)
+    }
+
+    private suspend fun patchConversation(
+        binding: LegacyImportBinding,
+        conversationId: String,
+        title: String?,
+        isPinned: Boolean?
+    ) {
+        val local = loadMutableConversation(binding, conversationId)
+        val response = try {
+            withBoundHistoryApi(binding.userId, binding.serverKey) {
+                patchConversation(
+                    conversationId,
+                    ConversationPatchRequest(title, isPinned, local.version)
+                )
+            }
+        } catch (error: HttpException) {
+            refreshAfterConversationConflict(binding, error)
+            throw error
+        }
+        applyConversationMutation(binding, response.data ?: error(response.message))
+    }
+
+    private suspend fun applyConversationMutation(
+        binding: LegacyImportBinding,
+        conversation: ConversationDto
+    ) {
+        app.authRepository.withStableSessionBinding(binding.userId, binding.serverKey) {
+            historySyncStore.mergeConversations(
+                binding.userId,
+                binding.serverKey,
+                listOf(conversation)
+            )
+        }
+    }
+
+    private suspend fun loadMutableConversation(
+        binding: LegacyImportBinding,
+        conversationId: String
+    ): ConversationEntity {
+        var local = conversationDao.getById(
             binding.userId,
             conversationId,
-            newTitle.trim(),
             binding.serverKey
-        )
+        ) ?: error("Conversation is unavailable")
+        if (local.version <= 0) {
+            historySyncCoordinator.syncConversations(
+                binding.userId,
+                binding.serverKey,
+                forceFull = true
+            )
+            local = conversationDao.getById(
+                binding.userId,
+                conversationId,
+                binding.serverKey
+            ) ?: error("Conversation is unavailable on the server")
+        }
+        check(local.version > 0) { "Conversation has no server version" }
+        return local
+    }
+
+    private suspend fun refreshAfterConversationConflict(
+        binding: LegacyImportBinding,
+        error: HttpException
+    ) {
+        if (error.code() == 409) {
+            historySyncCoordinator.syncConversations(
+                binding.userId,
+                binding.serverKey,
+                forceFull = true
+            )
+        }
     }
 
     suspend fun deleteMessage(messageId: String) {

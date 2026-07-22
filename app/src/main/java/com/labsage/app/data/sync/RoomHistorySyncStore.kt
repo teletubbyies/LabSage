@@ -207,7 +207,7 @@ class RoomHistorySyncStore(
         isPinned = isPinned,
         version = version,
         syncVersion = syncVersion,
-        isDeleted = false,
+        isDeleted = isDeleted,
         ownerUserId = userId,
         ownerServerKey = serverKey
     )

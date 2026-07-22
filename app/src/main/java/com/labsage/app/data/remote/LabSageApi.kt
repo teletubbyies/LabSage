@@ -27,6 +27,18 @@ interface LabSageApi {
         @Query("updatedAfter") updatedAfter: Long? = null
     ): ApiResponse<MessageListData>
 
+    @PATCH("api/conversations/{id}")
+    suspend fun patchConversation(
+        @Path("id") conversationId: String,
+        @Body request: ConversationPatchRequest
+    ): ApiResponse<ConversationDto>
+
+    @DELETE("api/conversations/{id}")
+    suspend fun deleteConversation(
+        @Path("id") conversationId: String,
+        @Query("version") version: Long
+    ): ApiResponse<ConversationDto>
+
     @POST("api/sync/import")
     suspend fun importLegacyHistory(@Body request: LegacyImportRequest): ApiResponse<LegacyImportData>
 
