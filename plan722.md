@@ -416,7 +416,18 @@ deleted_at          nullable tombstone
 - 重放同一游标结果幂等。
 - 首次无游标完整同步，后续只返回增量。
 
-完成状态：`pending`
+完成状态：`completed`
+
+完成记录（2026-07-23）：
+
+- 后端 commit：`883ee80 feat(F09): add incremental history cursors`。
+- Android commit：`bfe0eb7 feat(F09): sync history with persistent cursors`。
+- 会话与消息查询支持 `updatedAfter`，统一返回 `items / nextCursor / serverTime`；后端使用全局单调 `syncVersion` 与 `sync_version, id` 稳定顺序，不依赖设备时钟。
+- Android 首次无游标执行全量事务同步，后续只合并增量；Room 事务与 DataStore 的来源绑定/游标提交成功后才发布，失败保留旧游标并安全重放。
+- Room 升级至 v5，为会话缓存增加服务器归属；列表、搜索、消息和 legacy import 均按“用户 + 服务器”隔离，F08 旧行在网络前本地认领，离线升级仍可见且本地草稿不会跨后端上传。
+- 同一 userId 的 A→B→A 切换会强制按来源全量，跨服请求失败不泄露旧缓存；Room/DataStore 提交与登录、注销、切服共享认证互斥区，消除身份切换 TOCTOU。
+- 最终独立门禁：`review_f09_room_scope_gate` PASS；此前缓存来源混淆、跨服失败可见、DataStore 失败窗口、认证 TOCTOU、local-only 泄露和首次升级离线隐藏问题均在各轮 FAIL 后修复并由新代理复审。
+- 验证：Android 单元测试、Debug build、Lint 通过，Pixel_8 instrumentation 34/34；Go store/controller 测试、race 与定向 vet 通过。
 
 ### F10：会话重命名、置顶、软删除同步
 
