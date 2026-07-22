@@ -214,7 +214,14 @@ deleted_at          nullable tombstone
 - Refresh Token 轮换后旧 Token 不可继续使用。
 - Secret 缺失时不使用硬编码默认密钥启动生产式认证。
 
-完成状态：`pending`
+完成状态：`completed`
+
+完成记录：
+
+- 独立审查：`PASS`（`review_f02`）。
+- Go 后端 commit：`b9ae7c5 feat(F02): add JWT authentication lifecycle`。
+- 验证：认证/Store/Controller 专项测试、HTTP 生命周期集成测试、race 检测、`go vet` 与 `git diff --check` 通过。
+- 全仓仅保留计划前已存在的 `knowledge_cmd` 编译失败，审查确认与 F02 无关。
 
 ### F03：Android 登录 UI 与安全 Token 管理
 
