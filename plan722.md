@@ -242,7 +242,15 @@ deleted_at          nullable tombstone
 - Token 不以明文出现在普通 DataStore/SharedPreferences。
 - 登录错误、加载态、退出登录 UI 完整。
 
-完成状态：`pending`
+完成状态：`completed`
+
+完成记录：
+
+- 独立终审：`PASS`（`review_f03_final`；此前两轮 FAIL 均已修复并复审）。
+- Android commit：`3093b65 feat(F03): add secure Android authentication`。
+- 验证：单元测试、双 origin MockWebServer、并发 refresh、Debug APK、Lint、AndroidTest 编译通过。
+- 在线模拟器 Keystore instrumentation 通过，确认 Access Token、Refresh Token 与绑定后端地址均未明文落盘，并可由新 Store 实例解密恢复。
+- 提交通过交互式 hunk 暂存排除了 F03 开始前已有的文件管理及其他用户修改。
 
 ### F04：后端会话与消息查询 API
 
