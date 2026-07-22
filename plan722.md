@@ -386,7 +386,18 @@ deleted_at          nullable tombstone
 - 重复导入不会重复数据。
 - 只有服务端确认成功后才记录本地完成标志。
 
-完成状态：`pending`
+完成状态：`completed`
+
+完成记录（2026-07-23）：
+
+- 后端 commit：`d6cac68 feat(F08): import legacy conversation history`。
+- Android commit：`a1a5dd3 feat(F08): import legacy Room history once`。
+- 新增 JWT 保护的 `POST /api/sync/import`；服务端按稳定 ID 与同一逻辑 turn 幂等导入，在事务内分配单调 syncVersion，跨账号/跨会话冲突整批回滚。
+- Android 在历史同步前认领并快照 `syncVersion=0` 的既有 Room 数据，按“会话优先、消息随后”分批上传；任一批失败均不写完成标志，重试时依赖服务端幂等安全重放。
+- `legacy_import_completed` 按用户与服务器隔离，仅全部批次成功后写入 DataStore；导入绑定固定用户/服务器，同身份 token 可安全刷新，会话存储 CAS 防止切号竞态覆盖或误清新账号。
+- 遗留 user 消息统一为 completed；assistant pending/streaming 有内容规范化为 partial、无内容规范化为 failed，避免导入后 Continue 永久 409。
+- 最终独立门禁：`review_f08_status_gate` PASS；此前逻辑 turn 冲突、账号切换、JWT 过期、CAS TOCTOU 和 streaming 恢复问题均在各轮 FAIL 后修复并由新代理复审。
+- 验证：Android 单元测试、Debug APK、Lint 通过，Pixel_8 instrumentation 27/27；Go store/controller 测试、race 与 scoped vet 通过。全仓 Go 测试另受既有 `knowledge_cmd` 缺失函数及 AI tools 沙箱写目录问题影响，均与 F08 无关。
 
 ### F09：服务端增量同步游标
 
