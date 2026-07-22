@@ -327,7 +327,18 @@ deleted_at          nullable tombstone
 - 通知精确跳转仍工作。
 - 新旧数据均可正常展示。
 
-完成状态：`pending`
+完成状态：`completed`
+
+完成记录：
+
+- 独立终审：`PASS`（`review_f05_recheck` 的全新 F06 审查回合；此前四轮 F06 审查为 FAIL，所列异常终态、进程恢复、clean EOF、done 校验及 stale partial 问题均修复后重新审查）。
+- Android commit：`146895d feat(F06): migrate Room data to global UUIDs`。
+- Go 后端兼容 commit：`3bf7834 fix(F06): reconcile stale continuation prefixes`。
+- Room v2→v3 迁移保留旧会话/消息及外键关系，将 legacy ID 确定性映射为 UUID，并原样保留已有 UUID；通知、Navigation 与 UI 消息 ID 全链路改为 String。
+- SSE 严格校验结构化 done；clean EOF、畸形/串线终态、网络异常统一落为 partial/failed。进程死亡遗留 streaming 可恢复并回写 partial。
+- Continue 允许客户端持有服务端内容的旧前缀，服务端先补发权威 partial 的缺失后缀再继续生成，避免批量落盘窗口导致 409 或回答缺段。
+- 验证：Android 单元测试、Debug APK、Lint、AndroidTest 编译通过；Pixel_8 模拟器 instrumentation 12/12 通过；Go store/controller race 测试、`go vet` 与专项 diff-check 通过。
+- 提交按 `/tmp/labsage-f06-baseline.FZNy6I` 对六个重叠文件做 hunk 隔离，未夹带文件管理、文档、`.gradle`、AGENTS.md 等既有用户修改。
 
 ### F07：Android 首次全量同步与 Room 回填
 
