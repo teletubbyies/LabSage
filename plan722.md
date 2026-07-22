@@ -447,7 +447,18 @@ deleted_at          nullable tombstone
 - 旧 version 更新不会静默覆盖新数据。
 - 当前延迟删除/撤销体验不被破坏；撤销窗口结束后才提交服务端删除。
 
-完成状态：`pending`
+完成状态：`completed`
+
+完成记录（2026-07-23）：
+
+- 后端 commit：`8de0f03 feat(F10): sync conversation mutations`。
+- Android commit：`744be03 feat(F10): sync conversation mutations`。
+- 后端新增带 `version` 乐观锁的会话 PATCH 与 DELETE；重命名、置顶、软删除均在事务内提升 `version/syncVersion`，旧 version 返回 409，跨用户操作统一返回 404。
+- 增量查询使用 unscoped 会话读取 tombstone，并返回 `isDeleted/deletedAt`；全量查询继续隐藏已删除会话，其他客户端可通过游标增量移除本地记录。
+- Android 变更成功后合并服务端权威 DTO 到 Room；tombstone 隐藏会话且重放幂等，409 时强制全量拉取最新版，不静默覆盖。
+- 原延迟删除/撤销流程保持不变：Snackbar 撤销窗口内不调用服务端，超时后才 DELETE；请求失败时 pending 隐藏解除，Room 原行重新显示。
+- 最终独立门禁：`review_f10_tombstone_gate` PASS；首轮发现增量 tombstone 的旧测试预期后，已补 active+tombstone cursor、跨用户 DELETE 404 与旧 version DELETE 409 覆盖。
+- 验证：Android 单元测试、Debug build、Lint 通过，Pixel_8 instrumentation 35/35；Go `-count=1 -race` store/controller 测试与定向 vet 通过。
 
 ### F11：端到端联调、回归测试与文档
 
