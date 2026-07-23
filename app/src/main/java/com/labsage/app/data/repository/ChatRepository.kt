@@ -1,6 +1,7 @@
 package com.labsage.app.data.repository
 
 import android.net.Uri
+import android.provider.OpenableColumns
 import com.labsage.app.LabSageApplication
 import com.labsage.app.data.auth.AuthenticationState
 import com.labsage.app.data.local.AppDatabase
@@ -19,12 +20,19 @@ import com.labsage.app.data.sync.LegacyImportBinding
 import com.labsage.app.data.sync.LegacyImportLocalSource
 import com.labsage.app.data.sync.LegacyImportRemoteSource
 import com.labsage.app.data.sync.RoomHistorySyncStore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
-import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
+import okio.source
 import retrofit2.HttpException
 import java.io.File
+import java.io.FileNotFoundException
 import java.util.UUID
 
 /**
@@ -45,6 +53,11 @@ class ChatRepository(
     private val conversationDao: ConversationDao,
     private val messageDao: MessageDao
 ) {
+    private companion object {
+        const val MAX_MARKDOWN_BYTES = 10L * 1024 * 1024
+        const val MARKDOWN_MEDIA_TYPE = "text/markdown; charset=utf-8"
+    }
+
     private val historySyncStore = RoomHistorySyncStore(database)
     private val historyCursorStore = DataStoreHistoryCursorStore(app)
     private val legacyImportCoordinator = LegacyHistoryImportCoordinator(
@@ -219,52 +232,130 @@ class ChatRepository(
     /**
      * Upload a file picked from a content URI.
      *
-     * Uses the Application context ([app]) for the ContentResolver and cache dir
-     * rather than taking one as a parameter. The repository outlives any Activity
-     * (it is a lazy singleton on the Application), so a caller-supplied Activity
-     * context captured by this suspending call would leak across a configuration
-     * change while the upload is in flight (viewModelScope survives rotation).
+     * Known-size content streams directly from ContentResolver into OkHttp. Providers
+     * that do not expose a size fall back to a bounded temporary file, still without
+     * allocating a byte array proportional to the document.
      */
     suspend fun uploadFile(uri: Uri): Result<UploadData> {
+        var stagedFile: File? = null
         return try {
-            val contentResolver = app.contentResolver
-
-            // Resolve file name from content URI
-            val cursor = contentResolver.query(uri, null, null, null, null)
-            val fileName = cursor?.use {
-                if (it.moveToFirst()) {
-                    val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    if (nameIndex >= 0) it.getString(nameIndex) else "uploaded_file"
-                } else "uploaded_file"
-            } ?: "uploaded_file"
-
-            // Copy content to a temp file (needed for OkHttp request body)
-            val tempFile = File(app.cacheDir, "upload_$fileName")
-            contentResolver.openInputStream(uri)?.use { input ->
-                tempFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            } ?: return Result.failure(Exception("Cannot read file"))
-
-            // Build multipart request
-            val requestBody = tempFile
-                .readBytes()
-                .toRequestBody("application/octet-stream".toMediaType())
-            val part = MultipartBody.Part.createFormData("file", fileName, requestBody)
-
+            val prepared = prepareMarkdownUpload(uri)
+            stagedFile = prepared.stagedFile
+            val part = MultipartBody.Part.createFormData(
+                "file",
+                prepared.fileName,
+                prepared.requestBody
+            )
             val response = app.api.uploadFile(part)
-            // Cleanup temp file
-            tempFile.delete()
-
             if (response.data != null) {
                 Result.success(response.data)
             } else {
                 Result.failure(Exception("Upload failed: ${response.message}"))
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(e)
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) {
+                stagedFile?.delete()
+            }
         }
     }
+
+    private suspend fun prepareMarkdownUpload(uri: Uri): PreparedUpload {
+        var stagedFile: File? = null
+        try {
+            return withContext(Dispatchers.IO) {
+                val metadata = resolveUploadMetadata(uri)
+                validateMarkdownMetadata(metadata)
+                val mediaType = MARKDOWN_MEDIA_TYPE.toMediaType()
+
+                if (metadata.size != null) {
+                    val body = StreamingRequestBody(metadata.size, mediaType) {
+                        val input = app.contentResolver.openInputStream(uri)
+                            ?: throw FileNotFoundException("Cannot read selected Markdown file")
+                        input.source()
+                    }
+                    PreparedUpload(metadata.fileName, body)
+                } else {
+                    val suffix = if (metadata.fileName.endsWith(".markdown", ignoreCase = true)) {
+                        ".markdown"
+                    } else {
+                        ".md"
+                    }
+                    val tempFile = File.createTempFile("upload_", suffix, app.cacheDir)
+                    stagedFile = tempFile
+                    val copied = app.contentResolver.openInputStream(uri)?.use { input ->
+                        tempFile.outputStream().use { output ->
+                            copyWithByteLimit(input, output, MAX_MARKDOWN_BYTES)
+                        }
+                    } ?: throw FileNotFoundException("Cannot read selected Markdown file")
+                    require(copied > 0) { "Markdown file is empty" }
+                    PreparedUpload(
+                        fileName = metadata.fileName,
+                        requestBody = tempFile.asRequestBody(mediaType),
+                        stagedFile = tempFile
+                    )
+                }
+            }
+        } catch (error: Throwable) {
+            withContext(NonCancellable + Dispatchers.IO) {
+                stagedFile?.delete()
+            }
+            throw error
+        }
+    }
+
+    private fun resolveUploadMetadata(uri: Uri): UploadMetadata {
+        var fileName: String? = null
+        var size: Long? = null
+        app.contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameIndex >= 0 && !cursor.isNull(nameIndex)) {
+                    fileName = cursor.getString(nameIndex)
+                }
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
+                    size = cursor.getLong(sizeIndex)
+                }
+            }
+        }
+        return UploadMetadata(
+            fileName = fileName?.trim().orEmpty().ifEmpty { "notes.md" },
+            size = normalizedUploadSize(size)
+        )
+    }
+
+    private fun validateMarkdownMetadata(metadata: UploadMetadata) {
+        val validExtension = metadata.fileName.endsWith(".md", ignoreCase = true) ||
+            metadata.fileName.endsWith(".markdown", ignoreCase = true)
+        require(validExtension) { "Only Markdown (.md or .markdown) files are supported" }
+        metadata.size?.let { size ->
+            require(size > 0) { "Markdown file is empty" }
+            if (size > MAX_MARKDOWN_BYTES) {
+                throw UploadTooLargeException(MAX_MARKDOWN_BYTES)
+            }
+        }
+    }
+
+    private data class UploadMetadata(
+        val fileName: String,
+        val size: Long?
+    )
+
+    private data class PreparedUpload(
+        val fileName: String,
+        val requestBody: RequestBody,
+        val stagedFile: File? = null
+    )
 
     // ============================================================
     // Persistence helpers

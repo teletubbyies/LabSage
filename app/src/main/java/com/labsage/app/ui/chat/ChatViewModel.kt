@@ -292,22 +292,35 @@ class ChatViewModel(
     // ============================================================
 
     fun uploadFile(uri: Uri) {
+        if (_uploadState.value is UploadState.Uploading) return
+        _uploadState.value = UploadState.Uploading
         viewModelScope.launch {
-            _uploadState.value = UploadState.Uploading
             val result = repository.uploadFile(uri)
-            _uploadState.value = result.fold(
-                onSuccess = { data ->
+            result.onSuccess { data ->
+                // Upload completion is authoritative. A non-critical local chat
+                // acknowledgement must not leave the UI stuck in Uploading.
+                _uploadState.value = UploadState.Success(data)
+                try {
                     // Add a system message about the upload
                     repository.saveUserMessage(
                         conversationId,
                         "Uploaded: ${data.fileName} (${formatFileSize(data.fileSize)})"
                     )
-                    UploadState.Success(data)
-                },
-                onFailure = { e ->
-                    UploadState.Error(e.message ?: "Upload failed")
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    // The remote upload succeeded; keep Success even if this
+                    // optional local acknowledgement could not be persisted.
                 }
-            )
+            }.onFailure { error ->
+                _uploadState.value = UploadState.Error(error.message ?: "Upload failed")
+            }
+        }
+    }
+
+    fun clearUploadState() {
+        if (_uploadState.value !is UploadState.Uploading) {
+            _uploadState.value = UploadState.Idle
         }
     }
 

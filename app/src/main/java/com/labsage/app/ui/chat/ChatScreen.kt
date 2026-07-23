@@ -69,6 +69,7 @@ fun ChatScreen(
     val activeRoute by viewModel.activeRoute.collectAsStateWithLifecycle()
     val pendingSend by viewModel.pendingSend.collectAsStateWithLifecycle()
     val historySyncState by viewModel.historySyncState.collectAsStateWithLifecycle()
+    val uploadState by viewModel.uploadState.collectAsStateWithLifecycle()
     val settings by app.appSettings.collectAsStateWithLifecycle()
 
     var inputText by remember { mutableStateOf("") }
@@ -209,7 +210,12 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { filePicker.launch("*/*") }) {
+                    IconButton(
+                        enabled = uploadState !is UploadState.Uploading,
+                        // Some document providers expose Markdown as
+                        // application/octet-stream; validate the extension after selection.
+                        onClick = { filePicker.launch("*/*") }
+                    ) {
                         Icon(Icons.Default.AttachFile, stringResource(R.string.attach_file), tint = scheme.onSurfaceVariant)
                     }
                     Box {
@@ -270,6 +276,22 @@ fun ChatScreen(
                         Spacer(Modifier.width(8.dp))
                         Text(stringResource(R.string.no_network_connection), style = MaterialTheme.typography.labelMedium, color = scheme.onErrorContainer)
                     }
+                }
+            }
+
+            if (uploadState is UploadState.Uploading) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.upload_in_progress),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = scheme.primary
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
                 }
             }
 
@@ -384,6 +406,19 @@ fun ChatScreen(
                 is StreamState.Error -> if (s.retryable) PartialMessageBanner(s.message, { viewModel.continueGeneration() }, { viewModel.regenerate() })
                 else Snackbar(Modifier.padding(16.dp)) { Text(stringResource(R.string.error_message, s.message)) }
                 else -> {}
+            }
+            val upload = uploadState
+            if (upload is UploadState.Error) {
+                Snackbar(
+                    modifier = Modifier.padding(16.dp),
+                    action = {
+                        TextButton(onClick = viewModel::clearUploadState) {
+                            Text(stringResource(R.string.action_close))
+                        }
+                    }
+                ) {
+                    Text(stringResource(R.string.upload_failed, upload.message))
+                }
             }
         }
     }

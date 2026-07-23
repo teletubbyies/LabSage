@@ -35,6 +35,8 @@
 
     <!-- Chat -->
     <string name="attach_file">添加附件</string>
+    <string name="upload_in_progress">正在上传 Markdown 笔记…</string>
+    <string name="upload_failed">上传失败：%1$s</string>
     <string name="more_chat_actions">更多会话操作</string>
     <string name="session_summary">会话摘要</string>
     <string name="summary_editor_description">可编辑的长期会话摘要，支持 Markdown</string>
