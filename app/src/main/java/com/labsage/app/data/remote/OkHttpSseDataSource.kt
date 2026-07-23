@@ -2,12 +2,10 @@ package com.labsage.app.data.remote
 
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.flowOn
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -35,6 +33,11 @@ class OkHttpSseDataSource(
 ) : SseDataSource {
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
+    internal companion object {
+        // Large enough for the observed tool-query burst while remaining strictly bounded.
+        const val EVENT_BUFFER_CAPACITY = 512
+    }
 
     override fun streamChat(request: ChatStreamRequest): Flow<SseEvent> = callbackFlow {
         val jsonBody = gson.toJson(request)
@@ -78,17 +81,29 @@ class OkHttpSseDataSource(
                 }
                 // Attempts to add the specified element to this channel without waiting.
                 //trySend never suspends and never throws exceptions.
-                trySend(event)
+                val delivery = trySend(event)
+                if (delivery.isFailure) {
+                    eventSource.cancel()
+                    close(
+                        IOException(
+                            "SSE consumer could not keep up with the bounded event buffer"
+                        )
+                    )
+                }
             }
 
             override fun onClosed(eventSource: EventSource) {
                 if (!terminalEventSeen) {
-                    trySend(
+                    val delivery = trySend(
                         SseEvent.Error(
                             message = "SSE connection closed before a terminal event",
                             retryable = true
                         )
                     )
+                    if (delivery.isFailure) {
+                        close(IOException("SSE connection closed while the event buffer was full"))
+                        return
+                    }
                 }
                 channel.close()
             }
@@ -111,7 +126,7 @@ class OkHttpSseDataSource(
         }
     }
 
-        .buffer(Channel.UNLIMITED)  // (key, otherwise terminate output unexpectedly)prevent data loss with 240+ events on tool queries
+        .buffer(EVENT_BUFFER_CAPACITY)
         .flowOn(Dispatchers.IO)
 
     // ============================================================

@@ -125,7 +125,7 @@ class ChatViewModel(
     private var currentToolStats = mutableMapOf<String, Int>()
     private var currentRoute: String? = null
     private var lastQuestion: String = ""
-    private var chunkCount = 0  // throttle Room writes
+    private val sseUpdateCadence = SseUpdateCadence()
     /** Per-tool-call start time (key → nanoTime) for duration measurement. */
     private val toolCallStartNanos = mutableMapOf<String, Long>()
 
@@ -137,11 +137,25 @@ class ChatViewModel(
             repository.getMessages(conversationId)
                 .conflate()  // drop intermediate emissions when consumer is slow
                 .collect { entities ->
-                    _messages.value = entities.map { it.toUiState() }
+                    val liveMessageId = streamingMessageId
+                    val liveContent = if (_streamState.value is StreamState.Streaming) {
+                        accumulatedAnswer.toString()
+                    } else {
+                        null
+                    }
+                    _messages.value = entities.map { entity ->
+                        entity.toUiState().let { persisted ->
+                            if (persisted.id == liveMessageId && liveContent != null) {
+                                persisted.copy(content = liveContent, isPartial = true)
+                            } else {
+                                persisted
+                            }
+                        }
+                    }
                     // Rehydrate resume state from a persisted partial reply — see
                     // [restorePartialStateIfAny]. Force-closing the app mid-stream
                     // kills the process and wipes in-memory _streamState, yet the
-                    // partial message is already flushed to Room every 5th chunk.
+                    // partial message is checkpointed to Room during streaming.
                     // Without this the "继续生成" banner never reappears on reopen,
                     // even though the partial content survived.
                     restorePartialStateIfAny(entities)
@@ -223,7 +237,7 @@ class ChatViewModel(
             toolCallStartNanos.clear()
             currentRoute = null
             streamingMessageId = null
-            chunkCount = 0
+            sseUpdateCadence.reset(android.os.SystemClock.elapsedRealtime())
 
             // Open SSE stream
             // data from network io, including chat data stored in db, and tool chain usage stored in memory.
@@ -254,6 +268,7 @@ class ChatViewModel(
             val userMessageId = currentUserMessageId ?: return@launch
             val requestId = currentClientRequestId ?: return@launch
             _streamState.value = StreamState.Streaming
+            sseUpdateCadence.reset(android.os.SystemClock.elapsedRealtime())
             streamingMessageId?.let { repository.markAssistantStreaming(it) }
 
             streamingJob = viewModelScope.launch {
@@ -336,22 +351,41 @@ class ChatViewModel(
 
             is SseEvent.Message -> {
                 accumulatedAnswer.append(event.text)
-                chunkCount++
+                val nowMs = android.os.SystemClock.elapsedRealtime()
+                val updateDecision = sseUpdateCadence.onChunk(nowMs)
+                val contentSnapshot = if (
+                    streamingMessageId == null ||
+                    updateDecision.publishUi ||
+                    updateDecision.checkpoint
+                ) {
+                    accumulatedAnswer.toString()
+                } else {
+                    null
+                }
+                var insertedFirstCheckpoint = false
 
                 if (streamingMessageId == null) {
                     streamingMessageId = repository.saveAssistantMessage(
                         conversationId = conversationId,
-                        content = accumulatedAnswer.toString(),
+                        content = checkNotNull(contentSnapshot),
                         isPartial = true,
                         originalQuestion = lastQuestion,
                         clientRequestId = checkNotNull(currentClientRequestId)
                     )
-                } else if (chunkCount % 5 == 0) {
-                    // Batch: write to Room every 5th chunk (reduces disk I/O
-                    // backpressure; final content always flushed on Done)
+                    sseUpdateCadence.markCheckpoint(nowMs)
+                    insertedFirstCheckpoint = true
+                }
+
+                if (updateDecision.publishUi || insertedFirstCheckpoint) {
+                    publishStreamingSnapshot(checkNotNull(contentSnapshot))
+                }
+
+                if (!insertedFirstCheckpoint && updateDecision.checkpoint) {
+                    // Persist at a time-based cadence independent of backend chunk size/rate.
+                    // The terminal path always flushes the final content.
                     repository.updateAssistantMessage(
-                        streamingMessageId!!,
-                        accumulatedAnswer.toString(),
+                        checkNotNull(streamingMessageId),
+                        checkNotNull(contentSnapshot),
                         isPartial = true
                     )
                 }
@@ -395,6 +429,7 @@ class ChatViewModel(
                     return
                 }
                 val finalAnswer = accumulatedAnswer.toString()
+                publishStreamingSnapshot(finalAnswer)
                 val localMessageId = streamingMessageId
                 val terminalMessageId = if (localMessageId != null) {
                     if (event.status == "completed") {
@@ -478,6 +513,7 @@ class ChatViewModel(
      */
     private suspend fun persistTerminalFailure(message: String, retryable: Boolean) {
         val failure = ChatTerminalFailure.from(accumulatedAnswer.toString())
+        publishStreamingSnapshot(failure.content)
         val terminalMessageId = streamingMessageId ?: repository.saveAssistantMessage(
             conversationId = conversationId,
             content = failure.content,
@@ -518,7 +554,7 @@ class ChatViewModel(
      * effectively runs once — right after the ViewModel is (re)created. Covers
      * the force-close-mid-stream case: process death wipes [_streamState],
      * [accumulatedAnswer] and [streamingMessageId], yet the partial reply was
-     * already flushed to Room every 5th chunk. We restore all three so that:
+     * already checkpointed to Room during streaming. We restore all three so that:
      *   - the "继续生成 / 重新生成" banner shows again (Error + retryable), and
      *   - [continueGeneration] appends the backend's delta onto [accumulatedAnswer]
      *     (which now holds the partial) → finalizes partial + continuation into
@@ -538,7 +574,7 @@ class ChatViewModel(
         currentClientRequestId = last.clientRequestId
         currentUserMessageId = recovered.user.id
         currentClientCreatedAt = recovered.user.clientCreatedAt
-        chunkCount = 0
+        sseUpdateCadence.reset(android.os.SystemClock.elapsedRealtime())
         val recoveredFromProcessDeath = last.status == "streaming"
         if (recoveredFromProcessDeath) {
             viewModelScope.launch {
@@ -562,6 +598,37 @@ class ChatViewModel(
 
     fun clearError() {
         _streamState.value = StreamState.Idle
+    }
+
+    /**
+     * Publishes the hot streaming row without waiting for a Room invalidation/query round-trip.
+     * The Room collector merges the same in-memory content while streaming, so an older
+     * checkpoint emission can never make the visible answer move backwards.
+     */
+    private fun publishStreamingSnapshot(content: String) {
+        val messageId = streamingMessageId ?: return
+        val current = _messages.value
+        val index = current.indexOfFirst { it.id == messageId }
+        val updated = if (index >= 0) {
+            current.toMutableList().also { messages ->
+                messages[index] = messages[index].copy(
+                    content = content,
+                    isPartial = true,
+                    status = "streaming"
+                )
+            }
+        } else {
+            current + MessageUiState(
+                id = messageId,
+                role = "assistant",
+                content = content,
+                timestamp = System.currentTimeMillis(),
+                isPartial = true,
+                originalQuestion = lastQuestion,
+                status = "streaming"
+            )
+        }
+        _messages.value = updated
     }
 
     /**
