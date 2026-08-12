@@ -125,7 +125,6 @@ class OkHttpSseDataSource(
             eventSource.cancel()
         }
     }
-
         .buffer(EVENT_BUFFER_CAPACITY)
         .flowOn(Dispatchers.IO)
 

@@ -1,6 +1,7 @@
 package com.labsage.app.ui.chat
 
 import android.net.Uri
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.labsage.app.data.local.entity.MessageEntity
@@ -13,8 +14,11 @@ import com.labsage.app.domain.model.StreamState
 import com.labsage.app.domain.model.ToolCallStatus
 import com.labsage.app.domain.model.ToolCallUi
 import com.labsage.app.notification.ResponseNotificationManager
+import com.labsage.app.util.formatFileSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -116,6 +120,7 @@ class ChatViewModel(
     // ============================================================
 
     private var streamingJob: Job? = null
+    private var messagesObservationJob: Job? = null
     private var streamingMessageId: String? = null
     private var currentUserMessageId: String? = null
     private var currentClientRequestId: String? = null
@@ -130,28 +135,30 @@ class ChatViewModel(
     private val toolCallStartNanos = mutableMapOf<String, Long>()
 
     init {
-        // Observe Room messages — conflate to skip intermediate states
-        // during rapid streaming updates (reduces recomposition from
-        // ~50/sec to ~10/sec without visible content loss)
+        startMessageObservation()
+        // Sync approval mode from persisted settings (single source of truth).
         viewModelScope.launch {
+            settingsRepository.settings.collect { s ->
+                _approvalMode.value = s.approvalMode
+            }
+        }
+        refreshMessages()
+    }
+
+    /**
+     * Room remains the source of truth while the conversation is idle. During an
+     * active SSE response this observer is cancelled: UI snapshots come from memory
+     * and Room checkpoints no longer cause this full-conversation query to rerun.
+     * Restarting this cold Flow after a terminal event performs one authoritative
+     * reconciliation query.
+     */
+    private fun startMessageObservation() {
+        if (messagesObservationJob?.isActive == true) return
+        messagesObservationJob = viewModelScope.launch {
             repository.getMessages(conversationId)
-                .conflate()  // drop intermediate emissions when consumer is slow
+                .conflate()
                 .collect { entities ->
-                    val liveMessageId = streamingMessageId
-                    val liveContent = if (_streamState.value is StreamState.Streaming) {
-                        accumulatedAnswer.toString()
-                    } else {
-                        null
-                    }
-                    _messages.value = entities.map { entity ->
-                        entity.toUiState().let { persisted ->
-                            if (persisted.id == liveMessageId && liveContent != null) {
-                                persisted.copy(content = liveContent, isPartial = true)
-                            } else {
-                                persisted
-                            }
-                        }
-                    }
+                    _messages.value = entities.map { it.toUiState() }
                     // Rehydrate resume state from a persisted partial reply — see
                     // [restorePartialStateIfAny]. Force-closing the app mid-stream
                     // kills the process and wipes in-memory _streamState, yet the
@@ -161,13 +168,12 @@ class ChatViewModel(
                     restorePartialStateIfAny(entities)
                 }
         }
-        // Sync approval mode from persisted settings (single source of truth).
-        viewModelScope.launch {
-            settingsRepository.settings.collect { s ->
-                _approvalMode.value = s.approvalMode
-            }
-        }
-        refreshMessages()
+    }
+
+    private suspend fun pauseMessageObservation() {
+        val activeObserver = messagesObservationJob
+        messagesObservationJob = null
+        activeObserver?.cancelAndJoin()
     }
 
     fun refreshMessages() {
@@ -187,6 +193,7 @@ class ChatViewModel(
     // ============================================================
 
     fun sendMessage(question: String) {
+        // no resending
         if (_streamState.value is StreamState.Streaming) return
         // Approval gate: stage the question for the UI to confirm.
         if (_approvalMode.value) {
@@ -216,6 +223,14 @@ class ChatViewModel(
                     clientRequestId = checkNotNull(currentClientRequestId),
                     clientCreatedAt = currentClientCreatedAt
                 )
+                publishUserMessage(
+                    messageId = checkNotNull(currentUserMessageId),
+                    content = question,
+                    timestamp = currentClientCreatedAt
+                )
+                // Wait until Room collection is fully cancelled before any SSE
+                // checkpoint writes can invalidate and rerun the messages query.
+                pauseMessageObservation()
             } catch (e: Exception) {
                 _streamState.value = StreamState.Error(
                     message = e.message ?: "Unable to write this conversation",
@@ -229,7 +244,7 @@ class ChatViewModel(
             _streamState.value = StreamState.Streaming
             accumulatedAnswer.clear()
             accumulatedTraces.clear()
-            currentToolStats = mutableMapOf<String, Int>()
+            currentToolStats = mutableMapOf()
             _traceLines.value = emptyList()
             _toolStats.value = emptyMap()
             _toolCalls.value = emptyList()
@@ -243,15 +258,36 @@ class ChatViewModel(
             // data from network io, including chat data stored in db, and tool chain usage stored in memory.
             // streamingJob is under viewModelScope not under before coroutine
             streamingJob = viewModelScope.launch {
-                repository.sendStreamMessage(
-                    sessionId = conversationId,
-                    question = question,
-                    clientMessageId = checkNotNull(currentUserMessageId),
-                    clientRequestId = checkNotNull(currentClientRequestId),
-                    clientCreatedAt = currentClientCreatedAt
-                )
-                    .catch { e -> handleStreamException(e) }
-                    .collect { event -> handleSseEvent(event) }
+                try {
+                    // including send and receive
+                    repository.sendStreamMessage(
+                        sessionId = conversationId,
+                        question = question,
+                        clientMessageId = checkNotNull(currentUserMessageId),
+                        clientRequestId = checkNotNull(currentClientRequestId),
+                        clientCreatedAt = currentClientCreatedAt
+                    )
+                        .catch { e -> handleStreamException(e) }
+                        .collect { event -> handleSseEvent(event) }
+                } finally {
+                    try {
+                        // A clean EOF without Done is still a failed terminal path;
+                        // persist the latest in-memory answer before reconciling.
+                        if (
+                            kotlinx.coroutines.currentCoroutineContext()[Job]?.isActive == true &&
+                            _streamState.value is StreamState.Streaming
+                        ) {
+                            persistTerminalFailure(
+                                message = "Connection closed before completion",
+                                retryable = true
+                            )
+                        }
+                    } finally {
+                        // Covers cancellation or a failure while processing/persisting
+                        // the terminal event.
+                        startMessageObservation()
+                    }
+                }
             }
         }
     }
@@ -267,21 +303,47 @@ class ChatViewModel(
         viewModelScope.launch {
             val userMessageId = currentUserMessageId ?: return@launch
             val requestId = currentClientRequestId ?: return@launch
-            _streamState.value = StreamState.Streaming
-            sseUpdateCadence.reset(android.os.SystemClock.elapsedRealtime())
-            streamingMessageId?.let { repository.markAssistantStreaming(it) }
+            pauseMessageObservation()
+            try {
+                _streamState.value = StreamState.Streaming
+                sseUpdateCadence.reset(android.os.SystemClock.elapsedRealtime())
+                streamingMessageId?.let { repository.markAssistantStreaming(it) }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                startMessageObservation()
+                throw error
+            } catch (error: Exception) {
+                startMessageObservation()
+                _streamState.value = state
+                return@launch
+            }
 
             streamingJob = viewModelScope.launch {
-                repository.continueStreamMessage(
-                    sessionId = conversationId,
-                    question = state.lastQuestion,
-                    partialAnswer = state.partialAnswer,
-                    clientMessageId = userMessageId,
-                    clientRequestId = requestId,
-                    clientCreatedAt = currentClientCreatedAt
-                )
-                    .catch { e -> handleStreamException(e) }
-                    .collect { event -> handleSseEvent(event) }
+                try {
+                    repository.continueStreamMessage(
+                        sessionId = conversationId,
+                        question = state.lastQuestion,
+                        partialAnswer = state.partialAnswer,
+                        clientMessageId = userMessageId,
+                        clientRequestId = requestId,
+                        clientCreatedAt = currentClientCreatedAt
+                    )
+                        .catch { e -> handleStreamException(e) }
+                        .collect { event -> handleSseEvent(event) }
+                } finally {
+                    try {
+                        if (
+                            kotlinx.coroutines.currentCoroutineContext()[Job]?.isActive == true &&
+                            _streamState.value is StreamState.Streaming
+                        ) {
+                            persistTerminalFailure(
+                                message = "Connection closed before completion",
+                                retryable = true
+                            )
+                        }
+                    } finally {
+                        startMessageObservation()
+                    }
+                }
             }
         }
     }
@@ -485,6 +547,7 @@ class ChatViewModel(
                 }
                 _activeRoute.value = currentRoute
                 _traceLines.value = emptyList()
+                startMessageObservation()
                 // Show completion indicator briefly
                 if (event.status == "completed") {
                     _justCompleted.value = true
@@ -537,6 +600,7 @@ class ChatViewModel(
             partialAnswer = failure.content,
             lastQuestion = lastQuestion
         )
+        startMessageObservation()
     }
 
     // ============================================================
@@ -600,10 +664,27 @@ class ChatViewModel(
         _streamState.value = StreamState.Idle
     }
 
+    /** Shows the successfully persisted user row without a Room query round-trip. */
+    private fun publishUserMessage(messageId: String, content: String, timestamp: Long) {
+        val userMessage = MessageUiState(
+            id = messageId,
+            role = "user",
+            content = content,
+            timestamp = timestamp,
+            status = "completed"
+        )
+        val current = _messages.value
+        val index = current.indexOfFirst { it.id == messageId }
+        _messages.value = if (index >= 0) {
+            current.toMutableList().also { it[index] = userMessage }
+        } else {
+            current + userMessage
+        }
+    }
+
     /**
      * Publishes the hot streaming row without waiting for a Room invalidation/query round-trip.
-     * The Room collector merges the same in-memory content while streaming, so an older
-     * checkpoint emission can never make the visible answer move backwards.
+     * Room observation is paused until the stream reaches a terminal state.
      */
     private fun publishStreamingSnapshot(content: String) {
         val messageId = streamingMessageId ?: return
@@ -661,15 +742,15 @@ class ChatViewModel(
                 // the same tool is called repeatedly in one stream.
                 val key = "tc_${callNo}_${name}_${_toolCalls.value.size}"
                 toolCallStartNanos[key] = System.nanoTime()
-                _toolCalls.value = _toolCalls.value + ToolCallUi(
-                    key = key,
-                    index = callNo,
-                    name = name,
-                    status = ToolCallStatus.CALLING,
-                    argsText = args,
-                    resultText = "",
-                    durationMs = 0
-                )
+                _toolCalls.value += ToolCallUi(
+                                    key = key,
+                                    index = callNo,
+                                    name = name,
+                                    status = ToolCallStatus.CALLING,
+                                    argsText = args,
+                                    resultText = "",
+                                    durationMs = 0
+                                )
             }
 
             line.startsWith("[tool]") && line.contains("调用完成") -> {
@@ -807,14 +888,6 @@ class ChatViewModel(
 
     private fun deriveTitle(question: String): String {
         return if (question.length <= 30) question else question.take(30) + "..."
-    }
-
-    private fun formatFileSize(bytes: Long): String {
-        return when {
-            bytes < 1024 -> "$bytes B"
-            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-            else -> "${"%.1f".format(bytes.toDouble() / (1024 * 1024))} MB"
-        }
     }
 
     // ============================================================

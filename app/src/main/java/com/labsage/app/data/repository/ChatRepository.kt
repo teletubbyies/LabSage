@@ -357,6 +357,37 @@ class ChatRepository(
         val stagedFile: File? = null
     )
 
+    /**
+     * List all knowledge-base files from the backend — GET /api/files.
+     * Backend is the source of truth (no local cache), so a failure surfaces to
+     * the caller rather than returning a stale list.
+     */
+    suspend fun listFiles(): Result<List<KnowledgeFileDto>> {
+        return try {
+            val response = app.api.listFiles()
+            if (response.data != null) {
+                Result.success(response.data.files)
+            } else {
+                Result.failure(Exception("List files failed: ${response.message}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Delete a knowledge-base file by stable id — DELETE /api/files/{id}.
+     * Real deletion happens server-side (disk + index); success only on HTTP 2xx.
+     */
+    suspend fun deleteFile(id: String): Result<Unit> {
+        return try {
+            app.api.deleteFile(id)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     // ============================================================
     // Persistence helpers
     // ============================================================

@@ -434,3 +434,124 @@ ACTION_OPEN_RESPONSE
 - `onCreate()` 与 `onNewIntent()` 为什么都要处理通知入口？`singleTop` 的行为是什么？
 - 为什么导航参数必须同时带 `conversationId` 和 `messageId`？
 - Compose 中多个 `LaunchedEffect` 同时控制同一个 `LazyListState` 会有什么竞态？本功能如何规避？
+
+
+## 六、文件 / 知识库管理页（Knowledge File Management）
+
+### 功能概述
+
+新增一个独立页面，从后端列出知识库文件、支持按文件名搜索、以及**真实的后端删除**（不可撤销，带确认）。入口在会话列表 TopAppBar 的 📁 图标。此前的「文件上传」只把文件 `POST /api/upload` 进后端全局知识库、本地零记录，用户上传后既看不到也删不掉；本页补上了「管理」这一半。
+
+| 属性 | 值 |
+|------|-----|
+| 页面 | `FileManagementScreen`（`ui/files/FileManagementScreen.kt`） |
+| ViewModel | `FileManagementViewModel`（状态机 `Loading/Success/Error` + `refreshing` + 乐观删除） |
+| 数据来源 | **后端权威**（`GET /api/files`），remote-first，**v1 不引入本地 Room 文件表** |
+| 删除 | `DELETE /api/files/{id}`，乐观删除 + 失败回滚 + 确认 Dialog |
+| 入口 | `ConversationListScreen` TopAppBar `Folder` 图标 → `NavRoutes.FILES` |
+| 后端契约 | `docs/files-api-contract.md`（GET/DELETE/upload 增 fileId + Go 参考实现） |
+
+### 架构决策
+
+| 决策点 | 选择 | 理由 |
+|------|------|------|
+| 列表数据源 | **remote-first（后端权威，内存 StateFlow）** | 文件是后端资源；引入本地 Room 表会带来「本地/远端同步 + 分歧」的复杂度，v1 不值得。与 SSE 不走 Room、`SettingsViewModel` 状态机一致 |
+| 删除模型 | **乐观删除 + 失败回滚**（不提供 Undo） | 后端真删、文件内容只在服务器，删除不可逆 → Undo 无法实现（无法通过 API 恢复）。乐观删除保证即时反馈，失败回滚 + snackbar 保证一致性 |
+| 刷新模型 | **后台刷新（保留列表 + 指示器）**，区分初次加载 | 初次/重试用全屏 `Loading`（无内容可留）；刷新保留当前列表、失败只弹 snackbar，不擦掉用户正在看的数据 |
+| 文件列表来源类型 | Retrofit `@GET`（非 SSE） | 列表是普通请求-响应，不经 `SseDataSource` 接口抽象，与 `chat/upload/session` 一致 |
+
+### 关键实现点
+
+1. **状态机驱动 UI**：`UiState { Loading; Success(files); Error(msg) }` 三态分别渲染加载圈 / 列表 / 错误+重试，镜像 `SettingsViewModel` 连接测试、`UploadState` 的写法。
+2. **乐观删除 + 回滚**：`delete(file)` 先同步从 `Success.files` 移除（`viewModelScope` 在主线程，state 变更无并发问题），再挂起调 `deleteFile`，失败时把该行按 `uploadedAt` 倒序插回 + 发 `DeleteFailed` 事件。`fileId` 为空时直接 return（兼容未升级的后端）。
+3. **后台刷新**：`refreshing: StateFlow<Boolean>` 单独驱动指示器；`fetch(replaceOnError)` 一个私有方法同时服务初次加载（replaceOnError=true → 落 Error）和刷新（replaceOnError=false → 保留列表 + 发 `LoadFailed`）。`if (_refreshing.value) return` 防重复并发刷新。
+4. **PullToRefreshBox + 刷新按钮双入口**：列表外包 `PullToRefreshBox(isRefreshing, onRefresh)`（手势下拉），TopAppBar 刷新按钮在 `refreshing` 时换成 `CircularProgressIndicator`、并 `enabled = !refreshing`。两入口都走 `viewModel.refresh()`。
+5. **删除确认 Dialog**：`AlertDialog`，确认才 `viewModel.delete`。后端删除不可逆，必须有这一步。
+6. **抽取 `formatFileSize`**：从 `ChatViewModel` 私有方法提到顶层 `util/Format.kt`，上传提示与文件行复用，避免重复。
+7. **`UploadData.fileId` 可空兼容**：旧后端不返回 `fileId` 时客户端不崩；契约要求后端补 `fileId` 才能端到端删除。
+
+### 数据流
+
+```
+会话列表 TopAppBar 📁  →  NavRoutes.FILES  →  FileManagementScreen
+  init { load() }  →  GET /api/files  →  Success(files) → LazyColumn
+  下拉 / 刷新按钮  →  refresh()  →  后台 GET（保留列表 + refreshing 指示器）
+  搜索框          →  setSearchQuery  →  remember(files, query) 过滤
+  行删除按钮       →  确认 Dialog  →  delete(file)
+                      ├ 乐观移除（即时）
+                      └ DELETE /api/files/{id}
+                          ├ 成功：保持移除
+                          └ 失败：按时间插回 + snackbar「删除失败，已恢复」
+```
+
+### 面试考点
+
+- 为什么文件页用 remote-first 而不像会话/消息那样走 Room？什么资源适合「后端权威」vs「本地缓存」？
+- 乐观删除为什么不做 Undo？什么场景下 Undo 才有意义（vs 会话列表的 stage/commit/undo）？
+- 刷新为何不能复用初次加载的全屏 `Loading`？后台刷新如何避免「擦掉用户正在看的数据」？
+- `PullToRefreshBox` 的实现原理（嵌套滚动 `NestedScrollConnection`）？为何要包在可滚动容器外？
+- `viewModelScope` 默认在哪个调度器？为什么乐观删除里「先改 state 再挂起」是线程安全的？
+- 删除失败回滚时，为什么用「按 `uploadedAt` 倒序插回」而不是直接还原原 list？
+
+| **影响文件** | `ApiModels.kt`、`LabSageApi.kt`、`ChatRepository.kt`、`util/Format.kt`（新）、`ui/files/FileManagementViewModel.kt`（新）、`ui/files/FileManagementScreen.kt`（新）、`MainActivity.kt`、`ConversationListScreen.kt`、`LabSageApplication.kt`、`strings.xml`、`docs/files-api-contract.md`（新） |
+
+---
+
+## 七、Compose 性能优化 + 重组实测（Recomposition Benchmark）
+
+### 功能概述
+
+流式生成时，Room 每攒够数据就 emit 一次全量消息列表，峰值约 50 次/响应，每次 emit 都可能触发 Compose 重组。本优化做两件事：
+
+1. **新增一项低入侵性能修复**：把 `MessageBubble` 变成**可跳过（skippable）**的 composable，避免流式时历史气泡被反复重组（含 MarkdownText 重新解析）。
+2. **新增一套 instrumented 重组测量测试**（`app/src/androidTest/.../ui/perf/`），用真实数据验证 `conflate` / `@Immutable`+`key` / `derivedStateOf` / 上述 MessageBubble 修复各自的收益。
+
+| 属性 | 值 |
+|------|-----|
+| 修复点 | `ChatScreen.kt`：`combinedClickable` 从 `MessageBubble.modifier` 移到外层 `Box` |
+| 测试 | `ConflateBackpressureTest.kt`、`ComposeRecompositionTest.kt`（androidTest） |
+| 测量仪器 | 纯协程 `collect` 触发计数 + `SideEffect { counter++ }` 重组计数（语义同 Layout Inspector） |
+
+### 架构决策：为什么 combinedClickable 会破坏 skip
+
+`MessageBubble(role, content, modifier, isStreaming, traceLines)` 原本接收 `modifier = Modifier.combinedClickable(onClick = {}, onLongClick = { showMenu = true })`。`combinedClickable` 产生的 modifier 元素按其持有的 lambda **引用**判等；而 `onClick={}` / `onLongClick={...}` 每次重组都是**新 lambda 实例** ⇒ modifier 元素「变了」 ⇒ `MessageBubble` 的 `modifier` 参数每次都被判定为 changed ⇒ composable 不可跳过 ⇒ 列表里任一消息更新，**所有可见气泡全部重组**。
+
+修复：把 `combinedClickable` 挪到外层 `Box`（外层重组很轻），`MessageBubble` 退回默认 `Modifier`（常量、稳定），其余参数本就稳定（`MessageUiState` 全稳定类型 + `traceLines`），于是历史气泡可被跳过，只有正在流式的那条重组。
+
+> 反直觉点（实测推翻教条）：原本怀疑是 `traceLines: List<String>` 这个 List 参数让 `MessageBubble` 不可跳过，但实测「带 List 字段的 data class」改 1 行仍只 1/10 重组——本版本 Compose 并未把 `kotlin.collections.List` 判 unstable。**真凶是 modifier 的新 lambda**。这条结论是用「隔离变量」法（同一 composable，只改 modifier 传不传）测出来的。
+
+### 真实数据（emulator-5554, API 37）
+
+| 实验 | 实测结果 |
+|------|----------|
+| `conflate` 背压（生产 ~50/s、消费 ~10/s） | collect 触发 **50 → 12**（76% 中间态被丢，无损） |
+| `conflate` happy path 对照（消费跟得上） | **50 → 50**（零丢弃，证明是背压兜底非采样器） |
+| `@Immutable` + `key` 列表，改 1 行 | 重组 **10 → 1** 行 |
+| `derivedStateOf`，源 0→20 | 读者重组 **21 → 2** |
+| MessageBubble 现状（combinedClickable 当 modifier 传入） | **8/8** 气泡全重组 |
+| MessageBubble 修复后（clickable 移到外层 Box） | **1/8** |
+
+复现：
+
+```bash
+./gradlew :app:connectedDebugAndroidTest
+adb logcat -d -s PerfBench:I
+```
+
+### 关键实现点
+
+1. **测量方法**：
+   - `conflate` 用**纯协程测试**测 collect 触发率（`collect` 里每 `_messages.value = x` 1:1 触发一次重组 ⇒ collect 触发率 = 重组触发率），最忠实。
+   - 重组用 `SideEffect { counter++ }`——它在 composable 每次成功提交的（重）组合后跑一次，被跳过则不跑，语义等同 Layout Inspector 重组计数。
+2. **必须制造背压**：快模拟器上消费端跟得上，`conflate` 零丢弃（这是**正确**表现，非「无用」）。要观测收益得人为把消费端钉成瓶颈（`delay` 模拟主线程被占住）。
+3. **espresso 3.7.0**：Compose 的 `createComposeRule()` 把 app-idle 同步走 `Espresso.onIdle()`，而 espresso 3.6.x 的输入注入器反射调用 `InputManager.getInstance()`，在 Android 16（API 36+）已被移除。`ui-test-junit4` 传递依赖钉了旧版 espresso，故显式强制 `espresso-core:3.7.0` + `ext:junit:1.3.0`。
+
+### 面试考点
+
+- 流式生成时你做了哪些 Compose 性能优化？怎么验证的？（四层 + instrumented test 实测数字）
+- `conflate` 和 `buffer(UNLIMITED)` 区别？为什么 Room 那条链用 conflate、SSE 那条用 buffer？（state vs event 语义）
+- 为什么快机上测不出 `conflate` 效果？怎么制造背压测？（happy path 测不出 unhappy path 价值）
+- `MessageBubble` 不可跳过你怎么定位的？（隔离变量法：只改 modifier 传不传，8/8 vs 1/8）
+- `SideEffect` 计数器为什么等于重组次数？被跳过时会怎样？（不跑，同 Layout Inspector 语义）
+
+| **影响文件** | `ui/chat/ChatScreen.kt`（clickable 移到外层 Box）、`app/src/androidTest/java/com/labsage/app/ui/perf/ConflateBackpressureTest.kt`（新）、`…/ComposeRecompositionTest.kt`（新）、`app/build.gradle.kts`（espresso 3.7.0）、`gradle/libs.versions.toml`（junitExt/espressoCore 升级） |

@@ -47,6 +47,14 @@ interface LabSageApi {
     @POST("api/upload")
     suspend fun uploadFile(@Part file: MultipartBody.Part): ApiResponse<UploadData>
 
+    /** List all knowledge-base files — GET /api/files */
+    @GET("api/files")
+    suspend fun listFiles(): ApiResponse<FileListData>
+
+    /** Delete a knowledge-base file by stable id — DELETE /api/files/{id} */
+    @DELETE("api/files/{id}")
+    suspend fun deleteFile(@Path("id") id: String): ApiResponse<Unit>
+
     /** Get session summary and facts — GET /api/session/context?Id=... */
     @GET("api/session/context")
     suspend fun getSessionContext(@Query("Id") id: String): ApiResponse<SessionContextData>

@@ -23,6 +23,7 @@ import com.labsage.app.domain.model.AppSettings
 import com.labsage.app.notification.ResponseNotificationManager
 import com.labsage.app.ui.chat.ChatViewModel
 import com.labsage.app.ui.conversation.ConversationListViewModel
+import com.labsage.app.ui.files.FileManagementViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -306,6 +307,18 @@ class LabSageApplication : Application() {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 if (modelClass.isAssignableFrom(ConversationListViewModel::class.java)) {
                     return ConversationListViewModel(repository) as T
+                }
+                throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
+            }
+        }
+    }
+
+    val fileManagementViewModelFactory: ViewModelProvider.Factory by lazy {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                if (modelClass.isAssignableFrom(FileManagementViewModel::class.java)) {
+                    return FileManagementViewModel(repository) as T
                 }
                 throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
             }

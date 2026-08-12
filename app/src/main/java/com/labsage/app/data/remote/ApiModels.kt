@@ -100,18 +100,54 @@ data class ChatData(
 /**
  * File upload response data.
  *   type FileUploadRes struct {
+ *       FileId   string `json:"fileId"`     // stable id (for list/delete)
  *       FileName string `json:"fileName"`
  *       FilePath string `json:"filePath"`
  *       FileSize int64  `json:"fileSize"`
  *   }
+ *
+ * fileId is nullable so the client keeps compiling against an un-upgraded
+ * backend; a file without an id cannot be deleted (the file-management page
+ * disables its delete button in that case). See docs/files-api-contract.md.
  */
 data class UploadData(
+    @SerializedName("fileId")
+    val fileId: String? = null,
     @SerializedName("fileName")
     val fileName: String,
     @SerializedName("filePath")
     val filePath: String,
     @SerializedName("fileSize")
     val fileSize: Long
+)
+
+/**
+ * A single knowledge-base file, returned by GET /api/files.
+ *   type KnowledgeFile struct {
+ *       Id         string `json:"id"`
+ *       FileName   string `json:"fileName"`
+ *       FilePath   string `json:"filePath"`
+ *       FileSize   int64  `json:"fileSize"`
+ *       UploadedAt int64  `json:"uploadedAt"` // ms epoch
+ *   }
+ */
+data class KnowledgeFileDto(
+    @SerializedName("id")
+    val id: String,
+    @SerializedName("fileName")
+    val fileName: String,
+    @SerializedName("filePath")
+    val filePath: String,
+    @SerializedName("fileSize")
+    val fileSize: Long,
+    @SerializedName("uploadedAt")
+    val uploadedAt: Long
+)
+
+/** Wraps the file list payload of GET /api/files: { "files": [ ... ] } */
+data class FileListData(
+    @SerializedName("files")
+    val files: List<KnowledgeFileDto>
 )
 
 // ============================================================

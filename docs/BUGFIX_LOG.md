@@ -151,6 +151,10 @@
 | 18 | 重新生成/继续生成按钮失效 | P1 | 状态丢失 | ✅ 已修复 |
 | 19 | 杀进程后"继续生成"横幅不出现 | P1 | 状态恢复 | ✅ 已修复 |
 | 20 | uploadFile 泄漏 Activity Context | P1 | 内存泄漏 | ✅ 已修复 |
+| 21 | 文件页刷新擦掉整个列表 | P2 | UX 缺陷 | ✅ 已优化 |
+| 22 | Compose tint 误传 ColorScheme | P2 | 类型错误（自查捕获） | ✅ 已修复 |
+| 23 | 后端文件接口三约束（无注册表/路径键/bleve 不热更） | P1 | 后端架构约束 | ✅ 已实现（含已知限制） |
+| 24 | 上传空响应：writeJSONAtomic 共享 .tmp 竞态 | P1 | 并发竞态（后端） | ✅ 已修复 |
 
 ---
 
@@ -326,3 +330,60 @@
 | **教训** | ① 能用 Application context 就别让 Activity context 进 ViewModel 的协程 scope——ViewModel 跨配置变更存活，捕获 Activity context 是教科书级泄漏模式；② Repository 既然已持有 Application，需要 Context 的操作就用它，依赖倒置的方向上也不能把短生命周期对象往长生命周期里塞；③ `LocalContext.current` 在 Composable 里拿到的是 Activity context，传进 ViewModel 等于 UI 层对象越界到业务层；④ 静态读代码只能定性"有泄漏嫌疑"，**LeakCanary 才是验证的金标准**，校招项目集成它本身也是加分项 |
 | **影响文件** | `ChatRepository.kt`、`ChatViewModel.kt`、`ChatScreen.kt`、`gradle/libs.versions.toml`、`app/build.gradle.kts` |
 | **面试考点** | ViewModel 为何能在配置变更后存活（`ViewModelStore` + `NonConfigurationInstance`）？Activity context vs Application context 的区别与各自泄漏场景？LeakCanary 检测原理（`WeakReference` + retain 观察 → 触发 GC → dump hprof → 分析到 GC root 的引用链）？ |
+
+### 21. 文件页刷新擦掉整个列表 —— refresh 复用了全屏 Loading 状态
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | 文件管理页点「刷新」或下拉刷新时，整个文件列表**瞬间消失**、替换为全屏 Loading 转圈，请求回来后列表才重新出现。慢网络下列表"闪没"，体验割裂 |
+| **根因** | `FileManagementViewModel` 初版让 `refresh() = load()`，而 `load()` 第一行就 `_state.value = UiState.Loading`——把唯一的 UI 状态整个替换成 Loading。由于列表数据存在 `UiState.Success(files)` 里，一旦切到 Loading，列表就没了；刷新语义和初次加载语义被混为一谈 |
+| **触发条件** | 任何在已有列表时触发刷新（点刷新按钮 / 下拉） |
+| **修复** | 把「初次加载」和「刷新」拆成两条路径：<br>1. 新增 `refreshing: StateFlow<Boolean>`，只驱动指示器（刷新按钮转圈 + pull-to-refresh 拇指），**不动 `UiState`**；<br>2. `load()`（初次/重试）：落全屏 `Loading`（此时没有可保留的列表）；<br>3. `refresh()`：仅当处于 `Success` 时，置 `refreshing=true` 并后台拉取，**保留当前 `Success` 列表**；失败时**不**落 Error，而是发 `LoadFailed` 事件弹 snackbar（不擦掉用户正在看的数据）；<br>4. 抽出私有 `fetch(replaceOnError, onFinally)` 同时服务两条路径；`if (_refreshing.value) return` 防重复并发刷新 |
+| **设计要点** | - 状态机里"列表数据"和"加载中"是互斥态，但"后台刷新"需要**同时**保留两者 → 必须用一个**独立于 UiState 的 `refreshing` 标志**承载"正在后台拉取"。<br>- 刷新失败的正确处理是"保持现状 + 提示"，不是"清空 + 报错"——用户正在看的数据优先级高于拉取结果。<br>- 顺带接入 `PullToRefreshBox`（BOM 2025.06.01 的 material3 已稳定提供），与刷新按钮共用 `viewModel.refresh()` |
+| **影响文件** | `ui/files/FileManagementViewModel.kt`、`ui/files/FileManagementScreen.kt`、`strings.xml`（`files_load_failed`） |
+| **面试考点** | 列表页"加载"和"刷新"为什么要区分两种状态表达？背景刷新如何不破坏当前数据？`PullToRefreshBox` 与独立 `isRefreshing` 状态如何配合？ |
+
+---
+
+### 22. Compose `tint` 误传 `ColorScheme`（类型不匹配，自查期捕获）+ 图标弃用
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | 文件页初版里有个私有辅助 `@Composable fun scheme() = MaterialTheme.colorScheme`，然后在 `EmptyState`/`NoSearchResults` 里写 `Icon(..., tint = scheme(), ...)`。**自查时发现类型不匹配**——`tint` 参数要的是 `Color`，而 `scheme()` 返回的是整个 `ColorScheme` 对象，若直接编译会报 type mismatch（未进入运行期） |
+| **根因** | 把"取整套配色"和"取某个颜色"混用。`MaterialTheme.colorScheme` 是 `ColorScheme`，要拿具体颜色必须 `.onSurfaceVariant` / `.primary` 等取一个 `Color`。叶子上需要的是单色，不是整套 |
+| **触发条件** | 开发期编写；在第一次 `assembleDebug` 前的自查中被发现并修复，未产生运行期 bug |
+| **修复** | 删掉 `scheme()` 辅助函数，叶子直接用 `tint = MaterialTheme.colorScheme.onSurfaceVariant`（取单个 `Color`）。顺带修掉同次编译报的弃用警告：`Icons.Filled.InsertDriveFile` → `Icons.AutoMirrored.Filled.InsertDriveFile`（Material 图标的 AutoMirrored 化，RTL 语言下方向才正确） |
+| **教训** | 1) Compose 的 `colorScheme` 是一整套配色对象，`Icon.tint`/`Text.color` 要的是其中**某一个** `Color`，别把整套对象塞进去——这是 Compose 新手常见类型混淆。2) Material Icons 大量 `Icons.Filled.Xxx` 在新版本被弃用、迁到 `Icons.AutoMirrored.Filled.Xxx`（带方向的图标如箭头、列表、文件），选 AutoMirrored 版本对 RTL 友好。3) **自查 + 一次 `compileDebugKotlin` 能在几秒内抓掉这类问题**，不必等联调 |
+| **影响文件** | `ui/files/FileManagementScreen.kt` |
+| **归属** | 开发期自查捕获（编译期/类型层），区别于其余联调期运行时 bug；记录以提醒 Compose 配色/图标的易错点 |
+
+---
+
+### 23. 后端文件管理接口：无文件注册表 + 索引按路径键 + bleve 不热更新 —— 三处约束的取舍
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | Android 文件页 `GET /api/files` 报 **HTTP 404**（后端 GoFrame 未注册该路由）。摸清后端 SuperBizAgent 后发现：要补 list/delete，得面对三个既有架构约束 |
+| **约束①：无文件注册表** | 知识库**没有 DB 表、没有内存注册表**。文件只存在三处：磁盘(`common.FileDir`)、Milvus 向量(按 `metadata._source`=绝对路径键)、词表产物(每次上传全量重建)。上传 `uploadFile.Save(dir,false)` 保留原文件名、不随机化 |
+| **约束②：索引按"绝对路径"键** | Milvus 块的 `metadata._source` = 文件绝对路径；`DeleteMilvusDocumentsBySource(ctx,cli,absPath)` 已存在、幂等。词表 `BuildRetrievalArtifacts` 全量扫目录重建，**无单文件粒度可删** |
+| **约束③：bleve 不热更新** | 词表检索器在进程启动时一次性 open bleve 索引，**删后重建的词表要重启后端才生效**；Milvus(稠密/BM25)删除则即时 |
+| **取舍** | 1) **`id` = 文件名**（非 uuid）：契合"路径即键"，引入 uuid 反而要新增 uuid→path 持久化（无 ORM 落库），侵入大无收益。客户端按不透明字符串处理，Retrofit `@Path` 自动 URL-编码、GoFrame 解码，中文/空格/`.` 都能过。<br>2) **磁盘删除为权威，索引清理 best-effort**：DELETE ①`os.Remove`(失败才整体失败、已删则跳过保证重试安全) → ②`DeleteMilvusDocumentsBySource`(失败记 warn) → ③`BuildRetrievalArtifacts`(失败记 warn)。把"用户删文件"的成败锚在最可预测的磁盘操作，索引一致性作后台 hygiene。<br>3) **路径穿越防护**：`id` 禁含 `/`、`\`、禁为 `.`/`..`，确保无法逃出上传目录 |
+| **代价/已知限制** | bleve 词表删除需重启后端才对运行中检索器生效（Milvus 删除即时）；Milvus 宕机时其残留块留到恢复 + 重删（幂等可重试）。要更强一致可把②③改 fatal，代价是 Milvus 宕机时无法删文件 |
+| **教训** | ① 给"无注册表、索引按路径键"的系统加 CRUD，最省事的稳定 id 就是路径/文件名本身，别为"看起来更专业"硬上 uuid（会逼你引入本不需要的持久化）。② 删除操作把"用户可见的真相"（磁盘）和"内部一致性"（索引）解耦：前者 fatal、后者 best-effort，能让 DELETE 在依赖（Milvus）抖动时仍可预测、可重试。③ 写增删接口务必先确认依赖的索引是否**热更新**——bleve 这种启动期加载的，删除即时性会有盲区，得在契约里写清 |
+| **影响文件** | 后端 `api/chat/v1/chat.go`、`internal/controller/chat/chat_v1_file_upload.go`、`internal/controller/chat/chat_v1_files.go`（新）；Android `docs/files-api-contract.md`（契约对齐）；Android 客户端**无需改动** |
+| **归属** | 后端（SuperBizAgent，Go），独立于 Android 仓库；记录于此供联调追溯 |
+
+---
+
+### 24. 上传响应空/失败 —— `writeJSONAtomic` 共享 `.tmp` 并发竞态
+
+| 项目 | 内容 |
+|------|------|
+| **现象** | 联调 `POST /api/upload` 时响应体为空（curl `-i` 连 HTTP 状态行都没有）；服务日志报 `build retrieval artifacts failed: ... rename data/retrieval/lexical_index.json.tmp data/retrieval/lexical_index.json: no such file or directory`。文件其实**已存盘 + Milvus 已索引 + 会出现在 `/api/files` 列表**，但 handler 走了 error 分支返回空 |
+| **根因** | `internal/ai/retriever/artifact.go` 的 `writeJSONAtomic` 用**固定** `<path>.tmp` 做"写临时文件→rename"原子写。两个 `BuildRetrievalArtifacts` 并发（启动期 `InitHybridRetriever` 重建 与 上传/删除触发的重建 撞上）时：后写者的 `WriteFile` 覆盖了前写者刚写的 `.tmp`，前写者 `Rename` 时该 `.tmp` 已被后写者 rename 走 → `ENOENT`。失败冒泡到 `buildIntoIndex` → 上传 handler 返回 `(nil, err)` → 响应空 |
+| **触发条件** | 上传/删除与另一次词表重建（启动重建、或快速连续操作）时间重叠。`-i`/`head` 还会吞掉错误响应，显得"完全空" |
+| **修复** | `writeJSONAtomic` 改用**每次调用唯一的 tmp 名**：`tmpPath := fmt.Sprintf("%s.%d.tmp", path, time.Now().UnixNano())`。并发写者各写各的 tmp、各自 rename，不再碰撞。最终文件不变 |
+| **验证** | rebuild + 重启后端：`POST /api/upload → 200` 且响应含 `fileId`（`{"message":"OK","data":{"fileId":"_sba_smoke6.md",...}}`）；完整往返 upload(200)→GET(出现)→DELETE(200+fileId)→GET(消失) 全绿；日志 `rename ... no such file` 计数 降为 0 |
+| **教训** | ① "写 tmp 再 rename"的原子写模式，**tmp 名必须每次唯一**（`os.CreateTemp` 或加纳秒/随机后缀），否则并发写同一路径必撞——这是经典 shared-temp-file 竞态。② `Rename` 报 `ENOENT` 而 `WriteFile` 没报错 = tmp 在两步之间被别人移走 = 有并发写者，是诊断信号。③ "上传响应失败但文件还在"这种半成功，根因常在主流程之后的副作用步骤（这里是 RAG 词表重建），要顺栈追到 `buildIntoIndex` 之后 |
+| **影响文件** | 后端 `internal/ai/retriever/artifact.go`（`writeJSONAtomic`） |
+| **归属** | 后端（SuperBizAgent，Go），联调文件管理页时发现并修复 |

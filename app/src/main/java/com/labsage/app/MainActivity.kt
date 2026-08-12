@@ -27,6 +27,7 @@ import com.labsage.app.domain.model.ThemeMode
 import com.labsage.app.notification.ResponseNotificationManager
 import com.labsage.app.ui.chat.ChatScreen
 import com.labsage.app.ui.conversation.ConversationListScreen
+import com.labsage.app.ui.files.FileManagementScreen
 import com.labsage.app.ui.settings.SettingsScreen
 import com.labsage.app.ui.theme.LabSageTheme
 import kotlinx.coroutines.launch
@@ -57,6 +58,7 @@ object NavRoutes {
     const val CONVERSATION_LIST = "conversation_list"
     const val CHAT = "chat/{conversationId}?messageId={messageId}"
     const val SETTINGS = "settings"
+    const val FILES = "files"
 
     fun chatRoute(conversationId: String, messageId: String? = null): String = buildString {
         append("chat/")
@@ -148,6 +150,9 @@ fun LabSageNavGraph(
                 },
                 onOpenSettings = {
                     navController.navigate(NavRoutes.SETTINGS)
+                },
+                onOpenFiles = {
+                    navController.navigate(NavRoutes.FILES)
                 }
             )
         }
@@ -181,6 +186,10 @@ fun LabSageNavGraph(
                 // Application scope survives the authentication route disappearing after logout.
                 onBaseUrlChange = app.backendSwitchCoordinator::switchTo
             )
+        }
+
+        composable(NavRoutes.FILES) {
+            FileManagementScreen(onBack = { navController.popBackStack() })
         }
     }
 }

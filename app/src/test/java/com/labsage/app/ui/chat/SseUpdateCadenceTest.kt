@@ -7,6 +7,43 @@ import org.junit.Test
 class SseUpdateCadenceTest {
 
     @Test
+    fun `cadence grid has deterministic ui and persistence counts`() {
+        val expectedUiPublishes = mapOf(33L to 250, 50L to 200, 100L to 100)
+        val expectedCheckpointUpdates = mapOf(250L to 39, 500L to 19, 1_000L to 9)
+
+        expectedUiPublishes.forEach { (uiIntervalMs, expectedUiCount) ->
+            expectedCheckpointUpdates.forEach { (checkpointIntervalMs, expectedCheckpointCount) ->
+                val cadence = SseUpdateCadence(uiIntervalMs, checkpointIntervalMs)
+                cadence.reset(startedAtMs = 0)
+                var uiPublishes = 0
+                var checkpointUpdates = 0
+
+                repeat(CHUNK_COUNT) { index ->
+                    val nowMs = (index + 1L) * CHUNK_PERIOD_MS
+                    val decision = cadence.onChunk(nowMs)
+                    if (decision.publishUi) uiPublishes++
+                    if (index == 0) {
+                        cadence.markCheckpoint(nowMs)
+                    } else if (decision.checkpoint) {
+                        checkpointUpdates++
+                    }
+                }
+
+                assertEquals(
+                    "UI count for $uiIntervalMs/$checkpointIntervalMs",
+                    expectedUiCount,
+                    uiPublishes
+                )
+                assertEquals(
+                    "checkpoint count for $uiIntervalMs/$checkpointIntervalMs",
+                    expectedCheckpointCount,
+                    checkpointUpdates
+                )
+            }
+        }
+    }
+
+    @Test
     fun `one thousand fast chunks use independent ui and checkpoint rates`() {
         val cadence = SseUpdateCadence()
         cadence.reset(startedAtMs = 0)

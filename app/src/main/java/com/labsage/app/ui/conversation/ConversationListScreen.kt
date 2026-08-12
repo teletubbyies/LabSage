@@ -38,7 +38,8 @@ import java.util.*
 fun ConversationListScreen(
     onConversationClick: (String) -> Unit,
     onNewConversation: (String) -> Unit,
-    onOpenSettings: () -> Unit = {}
+    onOpenSettings: () -> Unit = {},
+    onOpenFiles: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as LabSageApplication
@@ -86,6 +87,9 @@ fun ConversationListScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onOpenFiles) {
+                        Icon(Icons.Default.Folder, stringResource(R.string.action_files), tint = scheme.onSurfaceVariant)
+                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, stringResource(R.string.settings), tint = scheme.onSurfaceVariant)
                     }

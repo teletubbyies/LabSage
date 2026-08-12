@@ -413,7 +413,7 @@ data: Stream completed                        ← 结束
 ```
 OkHttpSseDataSource（实现 SseDataSource 接口）
   ├─ OkHttpClient (readTimeout=0 无限等待，日志只用 HEADERS 级别)
-  ├─ EventSources.createFactory() → EventSource（SSE 连接）
+  ├─ EventSources.createFactory() → EventSource（okhttp3的SSE 连接）
   ├─ EventSourceListener.onEvent() 回调 → callbackFlow.trySend()
   └─ 输出 Flow<SseEvent>.buffer(UNLIMITED).flowOn(IO)
 ```
@@ -697,7 +697,7 @@ Room.databaseBuilder(...)
 
 ### 6.1 Compose 的核心心智模型（小白向）
 
-> 《第一行代码》可能还停留在 XML 布局。Compose 是**声明式 UI**：你不写"把这个 TextView 的文字设成 X"，而是写"**UI 长什么样，取决于状态是什么**"。状态一变，Compose 自动重新画出受影响的部分（叫**重组 recomposition**）。
+> 《第一行代码》可能还停留在 XML 布局。Compose 是**声明式 UI**：不用写"把这个 TextView 的文字设成 X"，而是写"**UI 长什么样，取决于状态是什么**"。状态一变，Compose 自动重新画出受影响的部分（叫**重组 recomposition**）。
 
 ```kotlin
 // 命令式（XML 时代）：告诉系统"怎么做"
@@ -765,6 +765,116 @@ fun ChatScreen(viewModel: ChatViewModel) {
 
 > **`by` 是属性委托**：`collectAsStateWithLifecycle()` 返回一个 `State<T>`，用 `by` 直接当 `T` 用，少写一层 `.value`。
 
+```text
+ViewModel 修改 StateFlow
+        ↓
+collectAsStateWithLifecycle 收到新值 (StageFlow -> State<T>)
+        ↓
+Compose State.value 更新 (通过by/.value取出State<T>中的T)
+        ↓
+读取了 streamState 的 Composable 重新执行
+        ↓
+when 重新判断
+        ↓
+显示 StreamingIndicator()
+
+
+MutableStateFlow 值变化
+-> collectAsStateWithLifecycle 收到变化
+-> Compose State 变化
+-> Compose 发现 ChatScreen 读过这个 State
+-> 触发相关 Composable 重组
+
+
+```
+对，基本就是这个意思。我们把你的话拆开看。
+
+```kotlin
+val streamState by viewModel.streamState.collectAsStateWithLifecycle()
+```
+
+这一步之后，`ChatScreen` 就“接上了” ViewModel 里的 `streamState`。
+
+更准确说：
+
+```text
+viewModel.streamState 是 StateFlow
+collectAsStateWithLifecycle() 开始收集这个 StateFlow
+收集到的最新值变成 Compose State
+ChatScreen 读取这个 Compose State
+```
+
+所以当 ViewModel 里执行：
+
+```kotlin
+_streamState.value = StreamState.Error(...)
+```
+
+就会发生：
+
+```text
+ViewModel 的 StateFlow 值变化
+-> collectAsStateWithLifecycle 收到新值
+-> Compose State 变化
+-> Compose 发现 ChatScreen 读了 streamState
+-> 触发重组
+```
+
+你说的“重新走一遍 ChatScreen”，可以这么理解，但要稍微精确一点：
+
+```text
+逻辑上：读了 streamState 的 Composable 会重新执行
+效果上：Compose 会尽量只更新真正受影响的 UI
+```
+
+也就是说，不是整个 Activity 重启，也不是整个页面所有控件都重新创建一遍。
+
+比如 `ChatScreen` 里面有很多状态：
+
+```kotlin
+val messages by viewModel.messages.collectAsStateWithLifecycle()
+val streamState by viewModel.streamState.collectAsStateWithLifecycle()
+val uploadState by viewModel.uploadState.collectAsStateWithLifecycle()
+```
+
+如果这次只变了 `streamState`，那主要受影响的是读了 `streamState` 的地方，比如：
+
+```kotlin
+when (val s = streamState) {
+    is StreamState.Error -> ...
+    else -> {}
+}
+```
+
+这段会重新判断。
+
+但消息列表如果只依赖 `messages`，而 `messages` 没变，Compose 就不会因为 `streamState` 变了而真的去改变每一条消息气泡。
+
+可以这样记：
+
+```text
+StateFlow 变化：负责通知 Compose “数据变了”
+collectAsStateWithLifecycle：负责把 ViewModel 状态接进 Compose
+重组：让相关 Composable 函数重新执行
+when：重新根据当前 streamState 选择显示什么组件
+精准重组：Compose 尽量只更新读了这个状态的 UI 区域
+```
+
+所以你的这句话可以改成更标准的面试版：
+
+```text
+ChatScreen 通过 collectAsStateWithLifecycle 订阅 ViewModel 暴露的 streamState。
+当 ViewModel 修改 _streamState.value 时，StateFlow 发射新值，Compose 收到后会触发读取了 streamState 的 Composable 重组。
+重组时 when(streamState) 会重新执行，根据新的状态选择显示 PartialMessageBanner、Snackbar 或不显示。
+Compose 不会粗暴刷新整个页面，而是尽量只重组和更新依赖 streamState 的 UI 部分。
+```
+
+一句话压缩版：
+
+```text
+是的，collectAsStateWithLifecycle 让 ChatScreen 能感知 streamState；streamState 变了会触发相关 UI 重组，when 重新判断，但最终主要影响的是读取 streamState 的那块 UI。
+```
+
 ### 6.3 LazyColumn：流式消息列表怎么渲染
 
 > **小白概念**：`LazyColumn` 是 Compose 版的 `RecyclerView`。它**只渲染屏幕可见的那几条**，滚出屏幕的回收，所以列表 1000 条也不卡。
@@ -809,6 +919,10 @@ viewModelScope.launch {
 ```
 
 > "`conflate()` 的作用：**当消费者（collect）来不及处理时，丢弃中间的旧值，只保留最新的一个**。比如 Room 一秒发射 50 次，但 collect 处理一次要 100ms（一秒只能处理 10 次），`conflate` 会把中间的 40 次丢掉，collect 始终拿到最新值。结果：重组从 50/s 降到 10/s，肉眼无感知差异（因为本来就是连续文字），但主线程轻松了。"
+- 第一次跑完后,协程不会退出,而是常驻、挂在 collect 内部等。
+- 这时触发机制才接管:Room 的 InvalidationTracker 发现 messages 表变了 → Room 在它的 IO 线程重跑查询 → 产出新 list → 流过 .conflate() → 送到挂在 Main 上的 collector。
+- "在 Dispatchers.Main 上 resume 一个协程" = Handler.post 一条 Message。所以你说的"DB 变更触发主线程调度,主线程干完手头的活就来处理"——对,但它是 resume 一个正在等的协程,不是启动一个新协程。
+- **（重点）**正因为每次 resume 是一条 Handler.post、主线程可能一时半会儿轮不到(正在做布局/重组),如果 Room 在主线程忙的时候连续 emit 了 5 次,conflate() 会把中间态全丢掉,只留最新值给主线程处理。这就是注释里 "drop intermediate emissions" 的运行时根因——它丢的不是查询,是排队的 resume。
 
 **`conflate` vs `debounce` vs `sample`**（追问）：
 
@@ -1000,7 +1114,7 @@ private fun normalizeBaseUrl(raw: String): String {
 
 **面试考点**：dangerous 权限申请流程？为什么 `destroy()`？直接 API vs Intent 弹窗的区别？
 
-### 8.2 工具执行面板（`ToolExecutionPanel`）🔥 亮点
+### 8.2 工具执行面板（`ToolExecutionPanel`）🔥 亮点 （细节？）
 
 把 Agent 调工具的过程做成**结构化时间线**：每个工具一张卡片（状态徽标 ✓/⏳/✕、调用序号、耗时），可展开看入参和输出。
 

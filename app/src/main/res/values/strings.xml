@@ -104,6 +104,18 @@
     <string name="connection_testing">正在测试…</string>
     <string name="connection_success">连接成功 · %1$d ms</string>
     <string name="connection_failed">连接失败 · %1$s</string>
+
+    <!-- File / knowledge management -->
+    <string name="files_title">文件管理</string>
+    <string name="action_files">文件管理</string>
+    <string name="files_search">搜索文件名</string>
+    <string name="files_empty">知识库还没有文件，在聊天里上传一个试试</string>
+    <string name="files_delete">删除文件</string>
+    <string name="files_delete_confirm">确定从知识库删除「%1$s」吗？此操作不可撤销。</string>
+    <string name="files_delete_failed">删除「%1$s」失败，已恢复</string>
+    <string name="files_load_failed">刷新失败 · %1$s</string>
+    <string name="files_retry">重试</string>
+    <string name="files_refresh">刷新</string>
     <string name="history_sync_failed">历史同步失败 · %1$s</string>
     <string name="history_sync_retry">重试</string>
 </resources>
