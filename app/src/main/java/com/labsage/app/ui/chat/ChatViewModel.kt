@@ -179,6 +179,13 @@ class ChatViewModel(
     fun refreshMessages() {
         if (_historySyncState.value.isSyncing) return
         viewModelScope.launch {
+            // A brand-new conversation has no local row yet (created on first
+            // send) — nothing to sync, so skip instead of surfacing a
+            // "history sync failed" banner on a fresh chat.
+            if (!repository.hasLocalConversation(conversationId)) {
+                _historySyncState.value = HistorySyncState()
+                return@launch
+            }
             _historySyncState.value = HistorySyncState(isSyncing = true)
             val result = repository.syncMessages(conversationId)
             _historySyncState.value = result.fold(

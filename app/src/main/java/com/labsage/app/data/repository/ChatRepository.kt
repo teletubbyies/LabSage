@@ -150,6 +150,16 @@ class ChatRepository(
         historySyncCoordinator.syncConversations(binding.userId, binding.serverKey)
     }
 
+    /**
+     * True if the conversation already has a local Room row. A brand-new
+     * conversation gets its row only on first send (upsertConversation) —
+     * before that there is no history to sync locally or remotely.
+     */
+    suspend fun hasLocalConversation(conversationId: String): Boolean {
+        val binding = currentLegacyImportBinding()
+        return conversationDao.getById(binding.userId, conversationId, binding.serverKey) != null
+    }
+
     suspend fun syncMessages(conversationId: String): Result<Unit> = runCatching {
         val binding = currentLegacyImportBinding()
         legacyImportCoordinator.ensureImported(binding)
