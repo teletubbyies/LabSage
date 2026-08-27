@@ -3566,3 +3566,296 @@ scrollToItem(targetIndex)
 
 
 ## 文件上传sup
+
+#### 3）文件上传功能
+
+项目支持用户上传 Markdown 笔记，后端收到文件后会进行内容切分、Embedding，并写入知识库。
+
+**旧版的问题主要是内存和磁盘开销。**
+
+旧版先把文件 URI 复制到临时文件，再通过 `readBytes()` 将整个文件读入 Java 堆，最后构造 Multipart 请求：
+
+```plain
+Content URI
+→ 临时文件
+→ ByteArray
+→ Multipart 上传
+```
+
+这意味着同一份文件既占用一份临时磁盘，又完整存在于内存中。实测上传 10 MiB Markdown 时，Java 堆峰值增量中位数达到 22.98 MiB。
+
+**我的优化是改成直接流式上传。**
+
+文件大小已知时，客户端不再创建临时文件和完整 ByteArray，而是通过自定义 `StreamingRequestBody`，从 ContentResolver 边读边写到 OkHttp：
+
+```plain
+Content URI
+→ 固定大小缓冲区
+→ OkHttp Multipart
+```
+
+这样，额外空间开销就从 O(文件大小) 降为近似 O(固定缓冲区)。
+
+项目还有 Token 自动刷新机制，因此 RequestBody 每次写出时都会重新打开文件 URI。这样即使 401 后 OkHttp 重新发送请求，也可以再次从文件开头读取，而不是复用已经读完的输入流。
+
+如果文件提供方没有返回大小，则使用固定缓冲区复制到临时文件，并在复制过程中限制最大 10 MiB，作为兼容性兜底。
+
+**我没有选择分片和断点续传。**
+
+因为当前上传的是不超过 10 MiB 的 Markdown 文本，失败后整文件重传成本较低，而真正的断点续传还需要后端增加 uploadId、**分片**状态和**合并**协议。
+
+所以当前选择单次流式 Multipart：不修改后端接口，优先解决已经存在的内存和磁盘问题。
+
+------
+
+**最后通过 Android A/B 基准验证效果。**
+
+我使用 1、5、10 MiB Markdown，对旧版和流式版分别进行测试，共采集 180 条正式样本。
+
+10 MiB 文件结果如下：
+
+| 指标                 | 旧版      | 流式版   |
+| -------------------- | --------- | -------- |
+| Java 堆峰值增量      | 22.98 MiB | 208 KiB  |
+| 额外临时磁盘         | 10 MiB    | 0        |
+| 客户端准备与写出耗时 | 48.48 ms  | 20.21 ms |
+
+最终峰值 Java 堆增量降低 99.1%，已知大小文件不再占用额外临时磁盘。
+
+这里的耗时只代表客户端文件准备和 RequestBody 写出，不包含网络、Embedding 和 Milvus，因此不会把它描述成整个上传接口加速 58.3%。
+
+#### （3）文件上传功能（sup）
+
+我们做的是一个带知识库的 AI 聊天应用。用户通过 Android 系统文件选择器选择 Markdown 笔记，客户端使用 Multipart 上传；后端收到文件后，会依次完成文件落盘、内容切分、Embedding 和 Milvus 写入，索引构建完成后才返回成功。
+
+**先说一下旧版实现，以及它的核心问题。**
+
+旧版上传链路是：
+
+```plain
+Content URI
+→ 复制到 cache 临时文件
+→ readBytes() 读成 ByteArray
+→ 构造 RequestBody
+→ Multipart 上传
+```
+
+这套实现虽然能正常工作，但同一份文件先完整写入临时磁盘，随后又通过 `readBytes()` 整体进入 Java 堆。文件越大，内存和磁盘开销越明显。
+
+在 10 MiB Markdown 的实测中，旧链路带来的 Java 堆峰值增量中位数达到 22.98 MiB，说明问题不只是理论上的“大文件可能 OOM”，而是当前实现确实存在文件大小级的额外内存开销。
+
+**优化的核心，就是不再把完整文件物化到内存，而是边读边写。**
+
+Android 文件选择器返回的是 `content://` URI，不是真实文件路径，所以客户端通过 ContentResolver 获取文件名和大小。
+
+文件大小已知时，使用自定义的 `StreamingRequestBody`。OkHttp 真正写请求体时，再打开 ContentResolver Source，通过固定大小的缓冲区直接写入 Multipart Sink：
+
+```plain
+Content URI
+→ ContentResolver Source
+→ 固定大小缓冲区
+→ OkHttp Multipart Sink
+```
+
+这样不再创建完整 ByteArray，也不需要已知大小路径下的临时文件，额外空间开销由 O(文件大小) 降为近似 O(固定缓冲区)。
+
+项目还配置了 OkHttp Authenticator。旧版 ByteArray RequestBody 天然可以重复写出，因此改成流式上传后不能丢掉这个能力。我的做法是每次执行 `**writeTo()**` **都重新通过 ContentResolver 打开 Source**，而不是复用同一个已经读取过的 InputStream。这样遇到 401 刷新 Token 后，RequestBody 仍然可以重新发送完整文件。
+
+如果文档提供方没有返回文件大小，则使用固定缓冲区复制到 cache 临时文件，并在复制过程中执行 10 MiB 上限，再通过文件构造 RequestBody。这是低频兼容路径，正常情况下仍然直接流式上传。
+
+**为什么没有选择分片和断点续传？**
+
+因为当前上传的是不超过 10 MiB 的 Markdown 文本，失败后重新上传整个文件的成本较低，而且现有后端只有单次 Multipart 接口。
+
+真正的断点续传还需要服务端提供 uploadId、**分片**状态、**offset 查询**、校验和幂等**合并**协议。**对于当前文件规模，这些复杂度带来的收益有限**。
+
+因此我选择保留单次 Multipart，只优化客户端的数据路径。这样不修改后端协议，也能直接解决当前最明确的内存和磁盘问题。
+
+**性能是怎么验证的？**
+
+我没有直接比较 `/api/upload` 的总响应时间，因为后端还会同步执行 Embedding 和 Milvus 写入，直接测接口会把服务端索引耗时混进客户端结果。
+
+因此我编写了 Android Instrumentation A/B 基准，分别复刻旧版和流式版的客户端链路，测试 1、5、10 MiB Markdown。每组预热 3 次、正式执行 30 次，共得到 180 条样本。
+
+10 MiB 文件的测试结果为：
+
+| 指标                     | 旧版      | 流式版   | 变化   |
+| ------------------------ | --------- | -------- | ------ |
+| Java 堆峰值增量中位数    | 22.98 MiB | 208 KiB  | -99.1% |
+| 已知大小路径临时磁盘     | 10 MiB    | 0        | -100%  |
+| 客户端准备与写出中位耗时 | 48.48 ms  | 20.21 ms | -58.3% |
+
+每次写出的字节数和 SHA-256 都与原文件一致。
+
+这里的耗时只代表客户端文件准备和 RequestBody 写出，不包含网络、Embedding 和 Milvus，因此不能把 58.3% 直接说成整个上传接口的耗时提升。
+
+**总结来说，**
+
+这次优化解决的核心矛盾是：旧版为了上传 `content://` 文件，把同一份内容先落临时磁盘、再完整读入 Java 堆，产生了文件大小级的额外开销。
+
+我将它改成了可重放的流式 RequestBody，在不修改现有 Multipart 接口的前提下，把 10 MiB 文件的峰值 Java 堆增量降低了 99.1%，并让已知大小文件不再占用额外临时磁盘。
+
+### 1. RequestBody 是什么？
+
+OkHttp 不关心文件来自哪里，它只会在需要发送数据时调用：
+
+```plain
+requestBody.writeTo(sink)
+```
+
+可以把它理解成：
+
+OkHttp 把一根“网络水管”交给 RequestBody，让 RequestBody 把文件内容倒进去。
+
+`writeTo()` 不一定只执行一次。项目配置了 Authenticator，当 Token 过期时可能发生：
+
+```plain
+第一次请求携带旧 Token
+→ 服务端返回 401
+→ Authenticator 刷新 Token
+→ OkHttp 重新发送原请求
+→ 再次调用 RequestBody.writeTo()
+```
+
+Authenticator 主要负责替换 Token，请求体能不能重新发送，仍然取决于 RequestBody 自己。
+
+### 2. 为什么旧版可以重新发送？
+
+旧版先执行：
+
+```plain
+val bytes = tempFile.readBytes()
+```
+
+这相当于把文件完整复印一份，放进 Java 堆：
+
+```plain
+文件 → ByteArray
+```
+
+第一次上传时，OkHttp 从 ByteArray 的开头读到结尾。
+
+收到 401 后，第二次上传仍然可以重新从 ByteArray 的第 0 个字节开始读取：
+
+```plain
+第一次：ByteArray[0] → ByteArray[最后]
+第二次：ByteArray[0] → ByteArray[最后]
+```
+
+所以旧版虽然浪费内存，但它天然可以重复发送。
+
+### 3. 为什么普通流式写法可能出问题？
+
+假设优化时只打开一次 InputStream：
+
+```plain
+val inputStream = contentResolver.openInputStream(uri)
+
+val body = object : RequestBody() {
+    override fun writeTo(sink: BufferedSink) {
+        inputStream!!.source().use { source ->
+            sink.writeAll(source)
+        }
+    }
+}
+```
+
+InputStream 可以理解成文件上的一个读取指针。
+
+第一次上传：
+
+```plain
+文件开头 ──────────→ 文件结尾
+                    ↑
+                指针在这里
+```
+
+第一次 `writeTo()` 完成后，InputStream 已经读到了结尾，而且可能已经关闭。
+
+401 刷新 Token 后，OkHttp 第二次调用 `writeTo()`，这个 InputStream 不会自动回到开头：
+
+```plain
+第二次 writeTo()
+→ 输入流已经耗尽或关闭
+→ 读不到内容
+→ 可能上传空文件、残缺文件或者直接报错
+```
+
+也不能简单依赖 `reset()`，因为 ContentProvider 返回的 InputStream 不一定支持回退，文件还可能来自云盘。
+
+### 4. 当前实现是怎么解决的？
+
+当前 RequestBody 保存的不是某个已经打开的 Source，而是“如何打开一个新 Source”的函数：
+
+```plain
+StreamingRequestBody(
+    length = fileSize,
+    mediaType = mediaType
+) {
+    val input = contentResolver.openInputStream(uri)
+        ?: throw FileNotFoundException()
+
+    input.source()
+}
+```
+
+可以把这个 Lambda 理解成一个“取新吸管的机器”：
+
+```plain
+不是保存：某一根已经使用过的吸管
+
+而是保存：每次需要时，重新拿一根新吸管
+```
+
+`writeTo()` 内部每次都会调用它：
+
+```plain
+override fun writeTo(sink: BufferedSink) {
+    openSource().use { source ->
+        // 把这次新打开的 Source 写入网络
+    }
+}
+```
+
+因此执行过程是：
+
+```plain
+第一次 writeTo()
+→ openInputStream(uri)
+→ 得到 Source A
+→ 从头读取完整文件
+→ 关闭 Source A
+
+收到 401
+→ Authenticator 刷新 Token
+
+第二次 writeTo()
+→ 再次 openInputStream(uri)
+→ 得到全新的 Source B
+→ 再从头读取完整文件
+→ 关闭 Source B
+```
+
+虽然两次访问的是同一个 `content://` URI，但每次打开的输入流都是新的，所以都能从文件开头开始读取。
+
+### 5. 这个设计真正解决了什么？
+
+它同时保留了旧、新两种方案的优点：
+
+| 方案                  | 内存占用         | 能否重新发送 |
+| --------------------- | ---------------- | ------------ |
+| ByteArray RequestBody | 整个文件进入内存 | 可以         |
+| 复用单个 InputStream  | 固定缓冲区       | 不可靠       |
+| 每次重新打开 Source   | 固定缓冲区       | 可以         |
+
+所以准确的说法不是：
+
+旧版存在 401 无法重传的问题。
+
+而是：
+
+旧版 ByteArray 天然可重放，但内存开销大；改成流式上传时，我没有简单复用单个 InputStream，而是让每次 `writeTo()` 都重新打开 ContentResolver Source，在降低内存占用的同时保留了 401 鉴权重传能力。
+
+面试时可以再压缩成：
+
+OkHttp 在 401 刷新 Token 后可能重新发送原请求。旧版 ByteArray 可以重复读取，但改成流式上传后，如果复用同一个 InputStream，第二次写出时流已经耗尽。因此我的 RequestBody 保存的是 Source 工厂，每次 `writeTo()` 都重新打开 URI，既避免整文件入堆，也保证请求体可以安全重放。

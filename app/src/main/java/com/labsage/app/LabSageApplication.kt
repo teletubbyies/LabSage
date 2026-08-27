@@ -60,15 +60,19 @@ class LabSageApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        responseNotificationManager.createChannel()
+        responseNotificationManager.createChannel() // 向系统注册通知channel
     }
 
     // ============================================================
     // Settings (DataStore)
     // ============================================================
 
+    // 创建一个与应用进程生命周期绑定的协程作用域，用于执行不依赖具体Activity/VM的全局后台任务
+    // SupervisorJob的特点：子协程失败，不会自动取消其它兄弟协程；但不会自动处理异常
+    // Default适合计算密集任务
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    // 传入this是为了获取应用级的datasore
     val settingsRepository: SettingsRepository by lazy { SettingsRepository(this) }
 
     /**
@@ -82,6 +86,7 @@ class LabSageApplication : Application() {
      * (attachBaseContext runs later), so an eager initializer would NPE. Lazy defers
      * the first access to a composable / network call, well after attach.
      */
+    // 变应用级别的热流，持续监听
     val appSettings: StateFlow<AppSettings> by lazy {
         settingsRepository.settings
             .stateIn(appScope, SharingStarted.Eagerly, AppSettings())
@@ -94,7 +99,7 @@ class LabSageApplication : Application() {
     // JSON
     // ============================================================
 
-    val gson: Gson by lazy { Gson() }
+    val gson: Gson by lazy { Gson() } // 用在keystore中对json对序列化/反序列化
 
     // ============================================================
     // Authentication — encrypted session + isolated refresh client

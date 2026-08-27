@@ -19,6 +19,7 @@ class ResponseNotificationManager(private val context: Context) {
     fun createChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
 
+        // notification
         val channel = NotificationChannel(
             CHANNEL_ID,
             "长回答完成",

@@ -130,8 +130,11 @@ fun LabSageNavGraph(
         navController.navigate(
             NavRoutes.chatRoute(destination.conversationId, destination.messageId)
         ) {
+            //清除对话列表上的页面，保留对话列表本身
+            //这样用户从通知打开聊天后，按返回会回到对话列表
+            //inclusive=false表示不删除对话列表本身
             popUpTo(NavRoutes.CONVERSATION_LIST) { inclusive = false }
-            launchSingleTop = true
+            launchSingleTop = true // 单栈顶模式
         }
         onNotificationDestinationConsumed()
     }
@@ -140,6 +143,7 @@ fun LabSageNavGraph(
         navController = navController, // control navigation
         startDestination = NavRoutes.CONVERSATION_LIST // 1st displayed view
     ) {
+        // 会话列表页面
         composable(NavRoutes.CONVERSATION_LIST) {
             ConversationListScreen(
                 onConversationClick = { id ->
@@ -157,6 +161,7 @@ fun LabSageNavGraph(
             )
         }
 
+        // 对话页面
         composable(
             route = NavRoutes.CHAT,
             arguments = listOf(
@@ -166,7 +171,11 @@ fun LabSageNavGraph(
                     defaultValue = ""
                 }
             )
-        ) { backStackEntry ->
+        ) {
+            // 包含当前页面的路由、路由参数、当前页面的生命周期、与该页面绑定的状态和 ViewModel 信息
+            backStackEntry ->
+            // 读取返回栈的路由参数
+            // return@composable只退出 composable 的页面内容，不是退出整个 LabSageNavGraph()
             val conversationId = backStackEntry.arguments?.getString("conversationId") ?: return@composable
             val targetMessageId = backStackEntry.arguments
                 ?.getString("messageId")
@@ -178,6 +187,7 @@ fun LabSageNavGraph(
             )
         }
 
+        // 设置页面
         composable(NavRoutes.SETTINGS) {
             SettingsScreen(
                 username = authenticatedUsername,
@@ -188,6 +198,7 @@ fun LabSageNavGraph(
             )
         }
 
+        // 文件管理页面
         composable(NavRoutes.FILES) {
             FileManagementScreen(onBack = { navController.popBackStack() })
         }
