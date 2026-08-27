@@ -7,9 +7,11 @@ import com.google.gson.Gson
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class KeystoreAuthSessionStoreTest {
@@ -22,7 +24,7 @@ class KeystoreAuthSessionStoreTest {
     }
 
     @Test
-    fun encryptedPreferencesNeverContainPlaintextTokens() {
+    fun encryptedStorageNeverContainsPlaintextTokens() {
         val session = AuthSession(
             user = AuthUser("user-1", "alice"),
             tokens = AuthTokens(
@@ -36,16 +38,48 @@ class KeystoreAuthSessionStoreTest {
 
         store.save(session)
 
-        val rawPreferences = context
-            .getSharedPreferences("labsage_secure_auth", Context.MODE_PRIVATE)
-            .all
-            .values
-            .joinToString()
-        assertFalse(rawPreferences.contains("plain-access-token"))
-        assertFalse(rawPreferences.contains("plain-refresh-token"))
-        assertFalse(rawPreferences.contains("private-backend.example"))
+        // Raw bytes of the Preferences DataStore file (ISO_8859_1 = 1:1 byte mapping).
+        val rawFile = File(context.filesDir, "datastore/labsage_secure_auth.preferences_pb")
+        assertTrue(rawFile.exists())
+        val raw = String(rawFile.readBytes(), Charsets.ISO_8859_1)
+        assertFalse(raw.contains("plain-access-token"))
+        assertFalse(raw.contains("plain-refresh-token"))
+        assertFalse(raw.contains("private-backend.example"))
         val restoredByNewProcessLikeStore = KeystoreAuthSessionStore(context, Gson()).load()
         assertEquals(session, restoredByNewProcessLikeStore)
+    }
+
+    @Test
+    fun legacySharedPreferencesAreImportedThenDeleted() {
+        // Simulate an old-version install: the legacy XML store still holds a blob.
+        val legacy = context.getSharedPreferences("labsage_secure_auth", Context.MODE_PRIVATE)
+        legacy.edit().putString("encrypted_session", "not-a-valid-blob").commit()
+
+        // Constructing a new store instance runs the one-time migration; the garbage
+        // blob then fails decryption and self-heals to "no session", not a crash.
+        val migrated = KeystoreAuthSessionStore(context, Gson())
+        assertNull(migrated.load())
+        assertFalse(
+            context.getSharedPreferences("labsage_secure_auth", Context.MODE_PRIVATE)
+                .all.containsKey("encrypted_session")
+        )
+    }
+
+    @Test
+    fun existingDataStoreSessionWinsOverLegacyFile() {
+        val session = session("user-w", "winner", "winner-refresh", "winner-access")
+        store.save(session)
+        val legacy = context.getSharedPreferences("labsage_secure_auth", Context.MODE_PRIVATE)
+        legacy.edit().putString("encrypted_session", "not-a-valid-blob").commit()
+
+        val migrated = KeystoreAuthSessionStore(context, Gson())
+        assertEquals(session, migrated.load())
+        // Re-fetch the instance: the held `legacy` reference keeps its in-memory map
+        // even after deleteSharedPreferences evicted it from the Context cache.
+        assertFalse(
+            context.getSharedPreferences("labsage_secure_auth", Context.MODE_PRIVATE)
+                .all.containsKey("encrypted_session")
+        )
     }
 
     @Test
