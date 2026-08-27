@@ -33,7 +33,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.labsage.app.BuildConfig
 import com.labsage.app.LabSageApplication
 import com.labsage.app.R
 import com.labsage.app.domain.model.AppSettings
@@ -107,19 +106,12 @@ fun SettingsScreen(
                 }
             }
 
-            // ---------- Backend address ----------
+            // ---------- Backend address (fixed at build time, not shown) ----------
             SectionCard(
                 title = stringResource(R.string.backend_address),
-                subtitle = stringResource(R.string.backend_address_subtitle),
+                subtitle = null,
                 icon = Icons.Default.DesktopWindows
             ) {
-                // Read-only: the endpoint is fixed at build time (BuildConfig.API_BASE_URL).
-                Text(
-                    BuildConfig.API_BASE_URL,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = scheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = viewModel::testConnection,
                     shape = RoundedCornerShape(12.dp)
