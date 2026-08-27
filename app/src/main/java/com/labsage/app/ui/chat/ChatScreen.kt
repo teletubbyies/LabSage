@@ -177,6 +177,20 @@ fun ChatScreen(
             listState.scrollToBottom(bottomAnchorIndex, animated = false)
         }
     }
+
+    // Stream end: the bubble re-renders from raw partial text to formatted
+    // markdown (usually taller) and the completion banner appears below the
+    // list, so the last per-chunk follow lands above the true bottom. None of
+    // the effects above re-run for that re-layout — wait one frame for it to
+    // settle, then snap once more to the real bottom. Guarded on the last
+    // message being an assistant reply: a just-sent user message must keep
+    // effect #1's animated scroll (this instant snap would cancel it).
+    LaunchedEffect(isStreaming, messages.lastOrNull()?.content, justCompleted) {
+        if (messages.lastOrNull()?.role != "assistant") return@LaunchedEffect
+        if (isStreaming || !initialScrollCompleted || !autoFollow) return@LaunchedEffect
+        withFrameNanos { }
+        if (autoFollow) listState.scrollToBottom(bottomAnchorIndex, animated = false)
+    }
     // Notification navigation waits for Room's first emission, then positions the
     // exact persisted assistant message instead of merely opening the conversation.
     LaunchedEffect(targetMessageId, messages) {
