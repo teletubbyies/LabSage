@@ -259,11 +259,7 @@ fun ChatScreen(
         bottomBar = {
             ChatInputBar(value = inputText, onValueChange = { inputText = it },
                 onSend = { if (inputText.isNotBlank()) { autoFollow = true; viewModel.sendMessage(inputText.trim()); inputText = "" } },
-                enabled = !isStreaming, quickChips = quickChips,
-                onVoiceResult = { recognized ->
-                    // Append recognized speech to whatever is already typed.
-                    inputText = if (inputText.isBlank()) recognized else inputText + recognized
-                })
+                enabled = !isStreaming, quickChips = quickChips)
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {

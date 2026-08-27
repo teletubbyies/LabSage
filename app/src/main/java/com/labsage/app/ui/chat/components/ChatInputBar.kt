@@ -43,9 +43,7 @@ fun ChatInputBar(
     onSend: () -> Unit,
     enabled: Boolean,
     modifier: Modifier = Modifier,
-    quickChips: List<QuickChip> = emptyList(),
-    /** Voice-input callback — recognized text is appended to the field. */
-    onVoiceResult: (String) -> Unit = {}
+    quickChips: List<QuickChip> = emptyList()
 ) {
     val scheme = MaterialTheme.colorScheme
 
@@ -70,7 +68,7 @@ fun ChatInputBar(
                 }
             }
 
-            // Field + voice + send
+            // Field + send
             Row(verticalAlignment = Alignment.Bottom) {
                 OutlinedTextField(
                     value = value,
@@ -92,8 +90,6 @@ fun ChatInputBar(
                         onSend = { if (enabled && value.isNotBlank()) onSend() }
                     )
                 )
-                Spacer(Modifier.width(8.dp))
-                VoiceInputButton(onResult = onVoiceResult, enabled = enabled)
                 Spacer(Modifier.width(8.dp))
                 GradientSendButton(
                     enabled = enabled && value.isNotBlank(),
