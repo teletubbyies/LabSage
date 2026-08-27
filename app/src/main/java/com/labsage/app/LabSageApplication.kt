@@ -10,7 +10,6 @@ import com.labsage.app.data.auth.AccessTokenInterceptor
 import com.labsage.app.data.auth.AuthApi
 import com.labsage.app.data.auth.AuthRepository
 import com.labsage.app.data.auth.AuthSession
-import com.labsage.app.data.auth.BackendSwitchCoordinator
 import com.labsage.app.data.auth.KeystoreAuthSessionStore
 import com.labsage.app.ui.auth.AuthViewModel
 import com.labsage.app.data.local.AppDatabase
@@ -47,16 +46,12 @@ import java.util.concurrent.TimeUnit
  *   - apiClient: 30s timeouts, body-level logging (for non-streaming endpoints)
  *   - sseClient:  no read timeout, header-level logging only (BODY would buffer the SSE stream)
  *
- * The network layer (Retrofit + SSE) is cached per base URL so the user can change
- * the backend address in Settings and new requests pick it up immediately, without
- * an app restart.
+ * The backend endpoint is FIXED at build time: BuildConfig.API_BASE_URL, declared per
+ * build type in app/build.gradle.kts (industry-standard buildConfigField). It is not
+ * runtime-editable. The network layer (Retrofit + SSE) is memoized per base URL, so in
+ * practice a single instance exists for the app's lifetime.
  */
 class LabSageApplication : Application() {
-
-    companion object {
-        /** Default backend URL (Android emulator → host localhost). */
-        const val DEFAULT_BASE_URL = AppSettings.DEFAULT_BASE_URL
-    }
 
     override fun onCreate() {
         super.onCreate()
@@ -76,9 +71,9 @@ class LabSageApplication : Application() {
     val settingsRepository: SettingsRepository by lazy { SettingsRepository(this) }
 
     /**
-     * Hot [AppSettings] stream. Eagerly subscribed so [currentBaseUrl] always
-     * reflects the latest persisted value; starts from defaults until DataStore
-     * finishes its first read.
+     * Hot [AppSettings] stream (theme, model, quick actions…). Eagerly subscribed so
+     * screens always see the latest persisted value; starts from defaults until
+     * DataStore finishes its first read.
      *
      * MUST be lazy: resolving it touches [settingsRepository], which touches the
      * DataStore `preferencesDataStore` delegate, which calls getApplicationContext()
@@ -92,8 +87,9 @@ class LabSageApplication : Application() {
             .stateIn(appScope, SharingStarted.Eagerly, AppSettings())
     }
 
+    /** Fixed backend endpoint — single source of truth is BuildConfig.API_BASE_URL. */
     private val currentBaseUrl: String
-        get() = authRepository.sessionBaseUrl() ?: appSettings.value.baseUrl
+        get() = BuildConfig.API_BASE_URL
 
     // ============================================================
     // JSON
@@ -126,15 +122,7 @@ class LabSageApplication : Application() {
         AuthRepository(
             apiProvider = ::authApiFor,
             sessionStore = authSessionStore,
-            baseUrlProvider = { normalizeBaseUrl(appSettings.value.baseUrl) }
-        )
-    }
-
-    val backendSwitchCoordinator: BackendSwitchCoordinator by lazy {
-        BackendSwitchCoordinator(
-            applicationScope = appScope,
-            logout = authRepository::logout,
-            persistBaseUrl = settingsRepository::setBaseUrl
+            baseUrlProvider = { BuildConfig.API_BASE_URL }
         )
     }
 
@@ -178,17 +166,17 @@ class LabSageApplication : Application() {
     }
 
     // ============================================================
-    // Network layer — cached per base URL (hot-swappable from Settings)
+    // Network layer — endpoint fixed at build time (BuildConfig.API_BASE_URL)
     // ============================================================
 
     private data class NetworkLayer(val api: LabSageApi, val sse: SseDataSource)
 
     private val networkCache = ConcurrentHashMap<String, NetworkLayer>()
 
-    /** Normalize a user-entered URL into a Retrofit-compatible base (trailing "/"). */
+    /** Normalize a URL into a Retrofit-compatible base (trailing "/"). */
     private fun normalizeBaseUrl(raw: String): String {
         var u = raw.trim()
-        if (u.isEmpty()) u = DEFAULT_BASE_URL
+        if (u.isEmpty()) u = BuildConfig.API_BASE_URL
         if (!u.startsWith("http://") && !u.startsWith("https://")) u = "http://$u"
         if (!u.endsWith("/")) u += "/"
         return u

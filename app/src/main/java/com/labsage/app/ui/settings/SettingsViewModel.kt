@@ -2,6 +2,7 @@ package com.labsage.app.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.labsage.app.BuildConfig
 import com.labsage.app.data.repository.SettingsRepository
 import com.labsage.app.domain.model.AppSettings
 import com.labsage.app.domain.model.QuickAction
@@ -24,10 +25,6 @@ class SettingsViewModel(
 
     val settings: StateFlow<AppSettings> = settingsRepository.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings())
-
-    fun setBaseUrl(url: String) {
-        viewModelScope.launch { settingsRepository.setBaseUrl(url) }
-    }
 
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch { settingsRepository.setThemeMode(mode) }
@@ -63,19 +60,15 @@ class SettingsViewModel(
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
     /**
-     * Ping the given backend URL with a short-timeout GET. Any HTTP response
-     * counts as "reachable" (even 404) — a connection refused / timeout counts
-     * as failure. Runs on Dispatchers.IO.
+     * Ping the fixed backend (BuildConfig.API_BASE_URL) with a short-timeout GET.
+     * Any HTTP response counts as "reachable" (even 404) — a connection refused /
+     * timeout counts as failure. Runs on Dispatchers.IO.
      */
-    fun testConnection(url: String) {
+    fun testConnection() {
         viewModelScope.launch {
             _connectionState.value = ConnectionState.Testing
-            _connectionState.value = withContext(Dispatchers.IO) { ping(url) }
+            _connectionState.value = withContext(Dispatchers.IO) { ping(BuildConfig.API_BASE_URL) }
         }
-    }
-
-    fun resetConnectionState() {
-        _connectionState.value = ConnectionState.Idle
     }
 
     private fun ping(rawUrl: String): ConnectionState {
@@ -103,7 +96,7 @@ class SettingsViewModel(
 
     private fun normalizeUrl(raw: String): String {
         var u = raw.trim()
-        if (u.isEmpty()) u = AppSettings.DEFAULT_BASE_URL
+        if (u.isEmpty()) u = BuildConfig.API_BASE_URL
         if (!u.startsWith("http://") && !u.startsWith("https://")) u = "http://$u"
         if (!u.endsWith("/")) u += "/"
         return u

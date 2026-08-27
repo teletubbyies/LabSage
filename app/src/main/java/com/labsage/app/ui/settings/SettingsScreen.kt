@@ -29,12 +29,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.labsage.app.BuildConfig
 import com.labsage.app.LabSageApplication
 import com.labsage.app.R
 import com.labsage.app.domain.model.AppSettings
@@ -47,8 +46,7 @@ import com.labsage.app.ui.chat.components.BrandMark
 fun SettingsScreen(
     username: String,
     onBack: () -> Unit,
-    onLogout: () -> Unit,
-    onBaseUrlChange: (String) -> Unit
+    onLogout: () -> Unit
 ) {
     val app = androidx.compose.ui.platform.LocalContext.current.applicationContext as LabSageApplication
     val viewModel: SettingsViewModel = viewModel(factory = app.settingsViewModelFactory)
@@ -115,39 +113,17 @@ fun SettingsScreen(
                 subtitle = stringResource(R.string.backend_address_subtitle),
                 icon = Icons.Default.DesktopWindows
             ) {
-                var url by remember(settings.baseUrl) { mutableStateOf(settings.baseUrl) }
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text(stringResource(R.string.base_url_label)) },
-                    placeholder = { Text(AppSettings.DEFAULT_BASE_URL) },
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                        keyboardType = KeyboardType.Uri,
-                        capitalization = KeyboardCapitalization.None
-                    ),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = scheme.primary,
-                        cursorColor = scheme.primary
-                    )
+                // Read-only: the endpoint is fixed at build time (BuildConfig.API_BASE_URL).
+                Text(
+                    BuildConfig.API_BASE_URL,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = scheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Button(
-                        onClick = { onBaseUrlChange(url) },
-                        enabled = url.trim() != settings.baseUrl && url.isNotBlank(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = scheme.primary)
-                    ) { Text(stringResource(R.string.action_save)) }
-                    Spacer(Modifier.width(10.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.testConnection(url) },
-                        enabled = url.isNotBlank(),
-                        shape = RoundedCornerShape(12.dp)
-                    ) { Text(stringResource(R.string.test_connection)) }
-                }
+                OutlinedButton(
+                    onClick = viewModel::testConnection,
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text(stringResource(R.string.test_connection)) }
                 Spacer(Modifier.height(6.dp))
                 ConnectionStatus(connectionState)
             }

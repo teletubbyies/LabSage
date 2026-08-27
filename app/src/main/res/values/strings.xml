@@ -83,8 +83,7 @@
 
     <!-- Settings -->
     <string name="backend_address">后端地址</string>
-    <string name="backend_address_subtitle">修改后新请求即时生效，无需重启</string>
-    <string name="base_url_label">后端地址（Base URL）</string>
+    <string name="backend_address_subtitle">后端地址由构建配置固定（BuildConfig），不可在应用内修改</string>
     <string name="test_connection">测试连接</string>
     <string name="appearance">外观</string>
     <string name="appearance_subtitle">可跟随系统暗黑模式，也可手动指定</string>

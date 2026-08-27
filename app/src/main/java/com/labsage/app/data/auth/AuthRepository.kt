@@ -29,7 +29,17 @@ class AuthRepository(
 
     init {
         val restored = sessionStore.load()
-        if (restored == null || restored.serverBaseUrl.isNullOrBlank() || restored.tokens.refreshExpiresAt <= nowMillis()) {
+        // A restored session is only usable if it was issued by the current backend:
+        // the URL is fixed at build time (baseUrlProvider = BuildConfig.API_BASE_URL),
+        // so a session persisted under a different origin (e.g. by an older build with
+        // a runtime-edited URL) can never authenticate or refresh — drop it up front.
+        val usable = restored != null &&
+            !restored.serverBaseUrl.isNullOrBlank() &&
+            restored.tokens.refreshExpiresAt > nowMillis() &&
+            runCatching {
+                sameOrigin(restored.serverBaseUrl.toHttpUrl(), baseUrlProvider().toHttpUrl())
+            }.getOrDefault(false)
+        if (!usable) {
             sessionStore.clear()
             _state.value = AuthenticationState.Unauthenticated
         } else {
@@ -97,8 +107,6 @@ class AuthRepository(
         val serverBaseUrl = session.serverBaseUrl?.takeIf { it.isNotBlank() } ?: return null
         return session.tokens.accessToken.takeIf { sameOrigin(serverBaseUrl.toHttpUrl(), requestUrl) }
     }
-
-    fun sessionBaseUrl(): String? = sessionStore.load()?.serverBaseUrl
 
     /** Immutable credentials snapshot for operations that must not follow an account switch. */
     fun sessionSnapshot(): AuthSession? = sessionStore.load()

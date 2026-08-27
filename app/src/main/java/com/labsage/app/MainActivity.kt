@@ -192,9 +192,8 @@ fun LabSageNavGraph(
             SettingsScreen(
                 username = authenticatedUsername,
                 onBack = { navController.popBackStack() },
-                onLogout = { coroutineScope.launch { app.authRepository.logout() } },
                 // Application scope survives the authentication route disappearing after logout.
-                onBaseUrlChange = app.backendSwitchCoordinator::switchTo
+                onLogout = { coroutineScope.launch { app.authRepository.logout() } }
             )
         }
 

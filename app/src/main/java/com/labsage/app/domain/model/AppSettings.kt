@@ -37,8 +37,6 @@ enum class QuickAction(val key: String) {
  */
 @Immutable
 data class AppSettings(
-    /** Backend base URL, e.g. "http://10.0.2.2:6872/". Normalized before use. */
-    val baseUrl: String = DEFAULT_BASE_URL,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     /** Preferred model — persisted locally; backend wiring is required to take effect. */
     val model: String = DEFAULT_MODEL,
@@ -48,8 +46,6 @@ data class AppSettings(
     val quickActions: List<QuickAction> = QuickAction.entries
 ) {
     companion object {
-        /** Android emulator → host localhost. */
-        const val DEFAULT_BASE_URL = "http://10.0.2.2:6872/"
         const val DEFAULT_MODEL = "deepseek-reasoner"
 
         /** Models offered in the settings picker (labels only). */

@@ -19,7 +19,14 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Backend endpoint is compiled in per build type (industry standard:
+            // BuildConfig field, not runtime-editable). Debug → emulator host loopback.
+            buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:6872/\"")
+        }
         release {
+            // TODO: replace with the real production address before shipping.
+            buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:6872/\"")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -35,6 +42,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

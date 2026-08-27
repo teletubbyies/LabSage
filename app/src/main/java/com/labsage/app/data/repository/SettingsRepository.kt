@@ -28,7 +28,6 @@ private val Context.settingsDataStore: DataStore<Preferences> by preferencesData
 class SettingsRepository(private val context: Context) {
 
     private object Keys {
-        val BASE_URL = stringPreferencesKey("base_url")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val MODEL = stringPreferencesKey("model")
         val APPROVAL_MODE = booleanPreferencesKey("approval_mode")
@@ -43,8 +42,6 @@ class SettingsRepository(private val context: Context) {
         }
         .map { prefs ->
             AppSettings(
-                baseUrl = prefs[Keys.BASE_URL]?.takeIf { it.isNotBlank() }
-                    ?: AppSettings.DEFAULT_BASE_URL,
                 themeMode = ThemeMode.fromString(prefs[Keys.THEME_MODE]),
                 model = prefs[Keys.MODEL]?.takeIf { it.isNotBlank() }
                     ?: AppSettings.DEFAULT_MODEL,
@@ -52,10 +49,6 @@ class SettingsRepository(private val context: Context) {
                 quickActions = QuickAction.fromKeys(prefs[Keys.QUICK_ACTIONS])
             )
         }
-
-    suspend fun setBaseUrl(url: String) {
-        context.settingsDataStore.edit { it[Keys.BASE_URL] = url.trim() }
-    }
 
     suspend fun setThemeMode(mode: ThemeMode) {
         context.settingsDataStore.edit { it[Keys.THEME_MODE] = mode.name }
