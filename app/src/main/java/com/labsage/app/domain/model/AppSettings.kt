@@ -38,17 +38,8 @@ enum class QuickAction(val key: String) {
 @Immutable
 data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    /** Preferred model — persisted locally; backend wiring is required to take effect. */
-    val model: String = DEFAULT_MODEL,
     /** When true, sending a message prompts for confirmation (tool-call approval gate). */
     val approvalMode: Boolean = false,
     /** Which quick-action chips appear in the input bar. */
     val quickActions: List<QuickAction> = QuickAction.entries
-) {
-    companion object {
-        const val DEFAULT_MODEL = "deepseek-reasoner"
-
-        /** Models offered in the settings picker (labels only). */
-        val MODEL_OPTIONS = listOf("deepseek-reasoner", "deepseek-chat")
-    }
-}
+)

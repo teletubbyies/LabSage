@@ -71,7 +71,7 @@ class LabSageApplication : Application() {
     val settingsRepository: SettingsRepository by lazy { SettingsRepository(this) }
 
     /**
-     * Hot [AppSettings] stream (theme, model, quick actions…). Eagerly subscribed so
+     * Hot [AppSettings] stream (theme, quick actions…). Eagerly subscribed so
      * screens always see the latest persisted value; starts from defaults until
      * DataStore finishes its first read.
      *

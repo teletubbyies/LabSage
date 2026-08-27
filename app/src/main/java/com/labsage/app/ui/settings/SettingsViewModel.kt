@@ -30,10 +30,6 @@ class SettingsViewModel(
         viewModelScope.launch { settingsRepository.setThemeMode(mode) }
     }
 
-    fun setModel(model: String) {
-        viewModelScope.launch { settingsRepository.setModel(model) }
-    }
-
     fun setApprovalMode(enabled: Boolean) {
         viewModelScope.launch { settingsRepository.setApprovalMode(enabled) }
     }

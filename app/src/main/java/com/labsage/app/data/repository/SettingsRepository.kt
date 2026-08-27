@@ -29,7 +29,6 @@ class SettingsRepository(private val context: Context) {
 
     private object Keys {
         val THEME_MODE = stringPreferencesKey("theme_mode")
-        val MODEL = stringPreferencesKey("model")
         val APPROVAL_MODE = booleanPreferencesKey("approval_mode")
         val QUICK_ACTIONS = stringPreferencesKey("quick_actions")
     }
@@ -43,8 +42,6 @@ class SettingsRepository(private val context: Context) {
         .map { prefs ->
             AppSettings(
                 themeMode = ThemeMode.fromString(prefs[Keys.THEME_MODE]),
-                model = prefs[Keys.MODEL]?.takeIf { it.isNotBlank() }
-                    ?: AppSettings.DEFAULT_MODEL,
                 approvalMode = prefs[Keys.APPROVAL_MODE] ?: false,
                 quickActions = QuickAction.fromKeys(prefs[Keys.QUICK_ACTIONS])
             )
@@ -52,10 +49,6 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setThemeMode(mode: ThemeMode) {
         context.settingsDataStore.edit { it[Keys.THEME_MODE] = mode.name }
-    }
-
-    suspend fun setModel(model: String) {
-        context.settingsDataStore.edit { it[Keys.MODEL] = model }
     }
 
     suspend fun setApprovalMode(enabled: Boolean) {

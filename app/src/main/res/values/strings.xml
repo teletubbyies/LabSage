@@ -86,9 +86,6 @@
     <string name="test_connection">测试连接</string>
     <string name="appearance">外观</string>
     <string name="appearance_subtitle">可跟随系统暗黑模式，也可手动指定</string>
-    <string name="model">模型</string>
-    <string name="model_subtitle">实验性 · 需后端配合读取生效</string>
-    <string name="preferred_model">首选模型</string>
     <string name="approval_mode">工具审批模式</string>
     <string name="approval_mode_subtitle">开启后，发送消息前需确认（防误触发工具调用）</string>
     <string name="confirm_before_sending">发送前确认</string>

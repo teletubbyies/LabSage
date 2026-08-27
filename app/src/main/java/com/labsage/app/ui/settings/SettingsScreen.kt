@@ -19,7 +19,6 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -35,7 +34,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.labsage.app.LabSageApplication
 import com.labsage.app.R
-import com.labsage.app.domain.model.AppSettings
 import com.labsage.app.domain.model.QuickAction
 import com.labsage.app.domain.model.ThemeMode
 import com.labsage.app.ui.chat.components.BrandMark
@@ -127,49 +125,6 @@ fun SettingsScreen(
                 icon = Icons.Default.Palette
             ) {
                 ThemePicker(settings.themeMode, viewModel::setThemeMode)
-            }
-
-            // ---------- Model ----------
-            SectionCard(
-                title = stringResource(R.string.model),
-                subtitle = stringResource(R.string.model_subtitle),
-                icon = Icons.Default.Tune
-            ) {
-                var expanded by remember { mutableStateOf(false) }
-                var model by remember(settings.model) { mutableStateOf(settings.model) }
-                ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { expanded = !expanded }
-                ) {
-                    OutlinedTextField(
-                        value = model,
-                        onValueChange = {},
-                        readOnly = true,
-                        modifier = Modifier
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true)
-                            .fillMaxWidth(),
-                        label = { Text(stringResource(R.string.preferred_model)) },
-                        trailingIcon = {
-                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-                        },
-                        shape = RoundedCornerShape(14.dp)
-                    )
-                    ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                        AppSettings.MODEL_OPTIONS.forEach { option ->
-                            DropdownMenuItem(
-                                text = { Text(option) },
-                                trailingIcon = {
-                                    if (option == model) Icon(Icons.Default.CheckCircle, null, tint = scheme.primary)
-                                },
-                                onClick = {
-                                    model = option
-                                    viewModel.setModel(option)
-                                    expanded = false
-                                }
-                            )
-                        }
-                    }
-                }
             }
 
             // ---------- Approval mode ----------
