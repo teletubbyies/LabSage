@@ -20,6 +20,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -131,6 +132,8 @@ class ChatViewModel(
     private var currentRoute: String? = null
     private var lastQuestion: String = ""
     private val sseUpdateCadence = SseUpdateCadence()
+    private val typewriter = TypewriterCadence()
+    private var renderJob: Job? = null
     /** Per-tool-call start time (key → nanoTime) for duration measurement. */
     private val toolCallStartNanos = mutableMapOf<String, Long>()
 
@@ -247,6 +250,11 @@ class ChatViewModel(
                 return@launch
             }
 
+            // Re-check after the suspend section above: a second send that slipped
+            // through the entry guard while this coroutine was suspended must not
+            // reset buffers under a live stream (pre-existing double-send window).
+            if (streamingJob?.isActive == true) return@launch
+
             // Reset stream state
             _streamState.value = StreamState.Streaming
             accumulatedAnswer.clear()
@@ -260,6 +268,7 @@ class ChatViewModel(
             currentRoute = null
             streamingMessageId = null
             sseUpdateCadence.reset(android.os.SystemClock.elapsedRealtime())
+            typewriter.reset()
 
             // Open SSE stream
             // data from network io, including chat data stored in db, and tool chain usage stored in memory.
@@ -277,6 +286,7 @@ class ChatViewModel(
                         .catch { e -> handleStreamException(e) }
                         .collect { event -> handleSseEvent(event) }
                 } finally {
+                    stopTypewriterRendering()
                     try {
                         // A clean EOF without Done is still a failed terminal path;
                         // persist the latest in-memory answer before reconciling.
@@ -314,6 +324,10 @@ class ChatViewModel(
             try {
                 _streamState.value = StreamState.Streaming
                 sseUpdateCadence.reset(android.os.SystemClock.elapsedRealtime())
+                // The prior partial is already displayed in full and the backend
+                // only sends deltas on top of it — pin the cursor so continue
+                // appends instead of re-typing (update_sse.md constraint 4).
+                typewriter.reset(accumulatedAnswer.length)
                 streamingMessageId?.let { repository.markAssistantStreaming(it) }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 startMessageObservation()
@@ -337,6 +351,7 @@ class ChatViewModel(
                         .catch { e -> handleStreamException(e) }
                         .collect { event -> handleSseEvent(event) }
                 } finally {
+                    stopTypewriterRendering()
                     try {
                         if (
                             kotlinx.coroutines.currentCoroutineContext()[Job]?.isActive == true &&
@@ -365,6 +380,8 @@ class ChatViewModel(
         }
         streamingMessageId = null
         accumulatedAnswer.clear()
+        stopTypewriterRendering()
+        typewriter.reset()
         _streamState.value = StreamState.Idle
 
         // Resend
@@ -421,10 +438,13 @@ class ChatViewModel(
             is SseEvent.Message -> {
                 accumulatedAnswer.append(event.text)
                 val nowMs = android.os.SystemClock.elapsedRealtime()
+                // SseUpdateCadence now drives only the Room checkpoint half; the
+                // publishUi half is superseded by the typewriter render loop (the
+                // field stays live for tests/benchmarks as the control arm —
+                // SSE_TYPEWRITER_FEASIBILITY.md §8).
                 val updateDecision = sseUpdateCadence.onChunk(nowMs)
                 val contentSnapshot = if (
                     streamingMessageId == null ||
-                    updateDecision.publishUi ||
                     updateDecision.checkpoint
                 ) {
                     accumulatedAnswer.toString()
@@ -443,14 +463,14 @@ class ChatViewModel(
                     )
                     sseUpdateCadence.markCheckpoint(nowMs)
                     insertedFirstCheckpoint = true
-                }
-
-                if (updateDecision.publishUi || insertedFirstCheckpoint) {
-                    publishStreamingSnapshot(checkNotNull(contentSnapshot))
+                    // The row is now visible — start the typewriter loop. It is
+                    // tick-then-delay, so this first chunk renders on arrival.
+                    startTypewriterRendering()
                 }
 
                 if (!insertedFirstCheckpoint && updateDecision.checkpoint) {
-                    // Persist at a time-based cadence independent of backend chunk size/rate.
+                    // Persist the FULL text at a time-based cadence independent of
+                    // backend chunk size/rate (UI shows only the rendered prefix).
                     // The terminal path always flushes the final content.
                     repository.updateAssistantMessage(
                         checkNotNull(streamingMessageId),
@@ -487,6 +507,10 @@ class ChatViewModel(
             }
 
             is SseEvent.Done -> {
+                // Cancel the render loop BEFORE anything else: after the first
+                // suspend point below, an uncancelled tick could publish an old
+                // prefix over the terminal full text (update_sse.md constraint 2).
+                stopTypewriterRendering()
                 if (
                     event.conversationId != conversationId ||
                     event.userMessageId != currentUserMessageId
@@ -582,6 +606,9 @@ class ChatViewModel(
      * malformed or mismatched done metadata, SSE error events, and transport loss.
      */
     private suspend fun persistTerminalFailure(message: String, retryable: Boolean) {
+        // First statement, before any suspend point — same terminal-race guard
+        // as the Done branch (no tick may outlive the terminal full publish).
+        stopTypewriterRendering()
         val failure = ChatTerminalFailure.from(accumulatedAnswer.toString())
         publishStreamingSnapshot(failure.content)
         val terminalMessageId = streamingMessageId ?: repository.saveAssistantMessage(
@@ -646,6 +673,9 @@ class ChatViewModel(
         currentUserMessageId = recovered.user.id
         currentClientCreatedAt = recovered.user.clientCreatedAt
         sseUpdateCadence.reset(android.os.SystemClock.elapsedRealtime())
+        // Recovered full text is displayed immediately via Room observation;
+        // pin the cursor so a later continue appends on top of it.
+        typewriter.reset(accumulatedAnswer.length)
         val recoveredFromProcessDeath = last.status == "streaming"
         if (recoveredFromProcessDeath) {
             viewModelScope.launch {
@@ -687,6 +717,38 @@ class ChatViewModel(
         } else {
             current + userMessage
         }
+    }
+
+    /**
+     * Drives typewriter rendering while a streaming assistant row is live: every
+     * TICK_MS the cursor advances by ceil(backlog / horizon) (see [TypewriterCadence])
+     * and the growing prefix is published. Tick-then-delay — the first tick runs
+     * before the first sleep, so the first Message chunk becomes visible on arrival.
+     *
+     * Single-thread proof: this loop and the SSE collector both run on
+     * viewModelScope (Dispatchers.Main.immediate) and the loop body between
+     * suspension points is synchronous, so reads of [accumulatedAnswer] can
+     * never interleave with the collector's append. After [stopTypewriterRendering]
+     * the loop cannot publish again: at cancel() time it is either undispatched
+     * (never runs), suspended in delay() (resumes with CancellationException),
+     * or mid-body (impossible — bodies never overlap on one thread). Hence an
+     * old prefix can never overwrite a terminal full publish.
+     */
+    private fun startTypewriterRendering() {
+        if (renderJob?.isActive == true) return // idempotent: chunks re-invoke
+        renderJob = viewModelScope.launch {
+            while (isActive) {
+                typewriter.onTick(accumulatedAnswer)?.let { rendered ->
+                    publishStreamingSnapshot(accumulatedAnswer.substring(0, rendered))
+                }
+                delay(TypewriterCadence.TICK_MS)
+            }
+        }
+    }
+
+    private fun stopTypewriterRendering() {
+        renderJob?.cancel()
+        renderJob = null
     }
 
     /**
