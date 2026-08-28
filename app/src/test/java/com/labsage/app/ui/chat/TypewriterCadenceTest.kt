@@ -247,6 +247,94 @@ class TypewriterCadenceTest {
     }
 
     // ============================================================
+    // Terminal accelerated drain (post-Done)
+    // ============================================================
+
+    @Test
+    fun `terminal drain finishes any backlog within the window with near-uniform steps`() {
+        val windowTicks = (
+            (TypewriterCadence.TERMINAL_DRAIN_MS + TypewriterCadence.DRAIN_TICK_MS - 1) /
+                TypewriterCadence.DRAIN_TICK_MS
+            ).toInt()
+
+        // Backlogs spanning trivial to the documented 3,200 chars/s equilibrium.
+        listOf(2, 60, 999, 3_200, 32_000).forEach { backlog ->
+            val typewriter = TypewriterCadence()
+            val source = "x".repeat(backlog)
+            val deltas = mutableListOf<Int>()
+            var rendered = 0
+            var ticksLeft = windowTicks
+            while (ticksLeft > 0) {
+                val newLength = typewriter.onDrainTick(source, ticksLeft) ?: break
+                deltas.add(newLength - rendered)
+                rendered = newLength
+                if (rendered >= source.length) break
+                ticksLeft--
+            }
+
+            assertEquals("backlog $backlog not fully drained", backlog, rendered)
+            assertTrue(
+                "backlog $backlog took ${deltas.size} ticks, window is $windowTicks",
+                deltas.size <= windowTicks
+            )
+            // ceil(backlog/remaining) is exactly uniform in real arithmetic; with
+            // integer ceil the sequence is q/q+1 throughout, plus a smaller final
+            // remainder segment — never an exponential tail, never one big dump.
+            val body = deltas.dropLast(1)
+            if (body.isNotEmpty()) {
+                assertTrue(
+                    "backlog $backlog body deltas $body not near-uniform",
+                    body.max() - body.min() <= 1
+                )
+            }
+            assertTrue("final segment larger than body", deltas.last() <= (body.max() ?: deltas.last()))
+        }
+    }
+
+    @Test
+    fun `terminal drain never splits surrogate pairs`() {
+        val source = ("😀🎉🚀💡".repeat(10) + "中文收尾").repeat(3)
+        val typewriter = TypewriterCadence()
+        typewriter.onTick(source) // partial render before Done
+        var ticksLeft = 24
+        while (ticksLeft > 0) {
+            val rendered = typewriter.onDrainTick(source, ticksLeft) ?: break
+            assertFalse(
+                "drain prefix must not end on an unpaired high surrogate",
+                Character.isHighSurrogate(source[rendered - 1])
+            )
+            if (rendered >= source.length) break
+            ticksLeft--
+        }
+        assertEquals(source.length, typewriter.renderedLength)
+    }
+
+    @Test
+    fun `terminal drain boundaries and renderedLength accessor`() {
+        val typewriter = TypewriterCadence()
+
+        // ticksRemaining = 1 consumes the whole backlog in one step.
+        assertEquals(50, typewriter.onDrainTick("y".repeat(50), ticksRemaining = 1))
+        assertEquals(50, typewriter.renderedLength)
+
+        // Caught up → null; then a new arrival resumes draining.
+        assertNull(typewriter.onDrainTick("y".repeat(50), ticksRemaining = 10))
+        assertEquals(51, typewriter.onDrainTick("y".repeat(50) + "z", ticksRemaining = 10))
+
+        // reset pins the accessor; invalid window throws.
+        typewriter.reset(7)
+        assertEquals(7, typewriter.renderedLength)
+        assertNull(typewriter.onDrainTick("short", ticksRemaining = 5))
+        var thrown = false
+        try {
+            typewriter.onDrainTick("abc", ticksRemaining = 0)
+        } catch (expected: IllegalArgumentException) {
+            thrown = true
+        }
+        assertTrue(thrown)
+    }
+
+    // ============================================================
     // Fixed schedules
     // ============================================================
 

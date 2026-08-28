@@ -30,7 +30,10 @@ internal class TypewriterCadence(private val horizon: Int = HORIZON) {
         require(horizon >= 1) { "horizon must be >= 1: $horizon" }
     }
 
-    private var renderedLength: Int = 0
+    private var cursor: Int = 0
+
+    /** How many chars of the source are currently displayed. */
+    val renderedLength: Int get() = cursor
 
     /**
      * Repositions the cursor. Pass the currently displayed length when resuming
@@ -39,7 +42,7 @@ internal class TypewriterCadence(private val horizon: Int = HORIZON) {
      */
     fun reset(renderedLength: Int = 0) {
         require(renderedLength >= 0) { "renderedLength must be >= 0: $renderedLength" }
-        this.renderedLength = renderedLength
+        cursor = renderedLength
     }
 
     /**
@@ -54,22 +57,43 @@ internal class TypewriterCadence(private val horizon: Int = HORIZON) {
      *         `source.substring(0, result)`), or null when there is no backlog.
      */
     fun onTick(source: CharSequence): Int? {
-        val backlog = source.length - renderedLength
+        val backlog = source.length - cursor
         if (backlog <= 0) return null
-        var target = renderedLength + (backlog + horizon - 1) / horizon
+        var target = cursor + (backlog + horizon - 1) / horizon
         if (target < source.length && Character.isLowSurrogate(source[target])) target += 1
-        renderedLength = target
+        cursor = target
+        return target
+    }
+
+    /**
+     * One tick of the terminal accelerated drain (SSE Done received; Room already
+     * holds the full text). The remaining backlog is consumed uniformly within
+     * [ticksRemaining] ticks: step = `ceil(backlog / ticksRemaining)` — the finish
+     * "prints faster" by ticking faster and shrinking the remaining window,
+     * NEVER by dumping: each call still pops a contiguous segment, the same
+     * surrogate guard as [onTick] applies.
+     *
+     * @param ticksRemaining ticks left in the drain window, ≥ 1.
+     * @return new prefix length, or null when there is no backlog.
+     */
+    fun onDrainTick(source: CharSequence, ticksRemaining: Int): Int? {
+        require(ticksRemaining >= 1) { "ticksRemaining must be >= 1: $ticksRemaining" }
+        val backlog = source.length - cursor
+        if (backlog <= 0) return null
+        var target = cursor + (backlog + ticksRemaining - 1) / ticksRemaining
+        if (target < source.length && Character.isLowSurrogate(source[target])) target += 1
+        cursor = target
         return target
     }
 
     /**
      * Terminal flush: jumps the cursor to [totalLength] (never backward).
-     * Used by tests/benchmarks to model the terminal publish; production
+     * Used by tests/benchmarks to model an instant terminal publish; production
      * terminal paths publish the full string directly instead.
      */
     fun flushTo(totalLength: Int): Int {
-        renderedLength = totalLength.coerceAtLeast(renderedLength)
-        return renderedLength
+        cursor = totalLength.coerceAtLeast(cursor)
+        return cursor
     }
 
     companion object {
@@ -78,5 +102,11 @@ internal class TypewriterCadence(private val horizon: Int = HORIZON) {
 
         /** Tick period for the render loop (≈30fps; 50ms is the documented fallback knob). */
         const val TICK_MS = 33L
+
+        /** Terminal drain window after Done: remaining backlog pops uniformly within this long. */
+        const val TERMINAL_DRAIN_MS = 500L
+
+        /** Drain-phase tick period — faster than [TICK_MS], so the finish visibly accelerates. */
+        const val DRAIN_TICK_MS = 16L
     }
 }

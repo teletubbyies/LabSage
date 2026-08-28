@@ -134,6 +134,17 @@ class ChatViewModel(
     private val sseUpdateCadence = SseUpdateCadence()
     private val typewriter = TypewriterCadence()
     private var renderJob: Job? = null
+    private var drainJob: Job? = null
+
+    /**
+     * True while the terminal accelerated drain (post-Done) is still popping the
+     * remaining backlog. Guards the streamingJob finally blocks: the terminal
+     * state transition is deferred to the drain's completion, so `_streamState
+     * is Streaming` alone would misfire "EOF without Done" failure persistence,
+     * and an early `startMessageObservation()` would let the Room terminal row
+     * overwrite the still-draining prefix.
+     */
+    private var terminalDrainPending = false
     /** Per-tool-call start time (key → nanoTime) for duration measurement. */
     private val toolCallStartNanos = mutableMapOf<String, Long>()
 
@@ -269,6 +280,10 @@ class ChatViewModel(
             streamingMessageId = null
             sseUpdateCadence.reset(android.os.SystemClock.elapsedRealtime())
             typewriter.reset()
+            // Unreachable with a live drain (entry guard blocks sends while
+            // Streaming) — defensive: a stray drain must never outlive its stream.
+            drainJob?.cancel()
+            terminalDrainPending = false
 
             // Open SSE stream
             // data from network io, including chat data stored in db, and tool chain usage stored in memory.
@@ -290,9 +305,12 @@ class ChatViewModel(
                     try {
                         // A clean EOF without Done is still a failed terminal path;
                         // persist the latest in-memory answer before reconciling.
+                        // terminalDrainPending: Done already handled this stream and
+                        // deferred its terminal sequence — do not double-terminalize.
                         if (
                             kotlinx.coroutines.currentCoroutineContext()[Job]?.isActive == true &&
-                            _streamState.value is StreamState.Streaming
+                            _streamState.value is StreamState.Streaming &&
+                            !terminalDrainPending
                         ) {
                             persistTerminalFailure(
                                 message = "Connection closed before completion",
@@ -301,8 +319,10 @@ class ChatViewModel(
                         }
                     } finally {
                         // Covers cancellation or a failure while processing/persisting
-                        // the terminal event.
-                        startMessageObservation()
+                        // the terminal event. During a pending drain the observation
+                        // restart belongs to the drain's completion — restarting now
+                        // would let the Room terminal row overwrite the draining prefix.
+                        if (!terminalDrainPending) startMessageObservation()
                     }
                 }
             }
@@ -328,6 +348,8 @@ class ChatViewModel(
                 // only sends deltas on top of it — pin the cursor so continue
                 // appends instead of re-typing (update_sse.md constraint 4).
                 typewriter.reset(accumulatedAnswer.length)
+                drainJob?.cancel()
+                terminalDrainPending = false
                 streamingMessageId?.let { repository.markAssistantStreaming(it) }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 startMessageObservation()
@@ -355,7 +377,8 @@ class ChatViewModel(
                     try {
                         if (
                             kotlinx.coroutines.currentCoroutineContext()[Job]?.isActive == true &&
-                            _streamState.value is StreamState.Streaming
+                            _streamState.value is StreamState.Streaming &&
+                            !terminalDrainPending
                         ) {
                             persistTerminalFailure(
                                 message = "Connection closed before completion",
@@ -363,7 +386,7 @@ class ChatViewModel(
                             )
                         }
                     } finally {
-                        startMessageObservation()
+                        if (!terminalDrainPending) startMessageObservation()
                     }
                 }
             }
@@ -381,6 +404,8 @@ class ChatViewModel(
         streamingMessageId = null
         accumulatedAnswer.clear()
         stopTypewriterRendering()
+        drainJob?.cancel()
+        terminalDrainPending = false
         typewriter.reset()
         _streamState.value = StreamState.Idle
 
@@ -436,6 +461,10 @@ class ChatViewModel(
             }
 
             is SseEvent.Message -> {
+                // Post-Done text (misbehaving server): Done already terminalized the
+                // stream and the drain is publishing toward finalAnswer — appending
+                // mid-drain would let prefixes overshoot and then regress. Ignore.
+                if (terminalDrainPending) return
                 accumulatedAnswer.append(event.text)
                 val nowMs = android.os.SystemClock.elapsedRealtime()
                 // SseUpdateCadence now drives only the Room checkpoint half; the
@@ -507,6 +536,9 @@ class ChatViewModel(
             }
 
             is SseEvent.Done -> {
+                // A protocol-violating second Done during the drain would launch a
+                // second drainJob racing the first. The first Done is authoritative.
+                if (terminalDrainPending) return
                 // Cancel the render loop BEFORE anything else: after the first
                 // suspend point below, an uncancelled tick could publish an old
                 // prefix over the terminal full text (update_sse.md constraint 2).
@@ -522,7 +554,9 @@ class ChatViewModel(
                     return
                 }
                 val finalAnswer = accumulatedAnswer.toString()
-                publishStreamingSnapshot(finalAnswer)
+                // Room terminalization FIRST — the drain below is UI-only, and with
+                // the full text already persisted a mid-drain process death still
+                // recovers to the complete answer (crash semantics unchanged).
                 val localMessageId = streamingMessageId
                 val terminalMessageId = if (localMessageId != null) {
                     if (event.status == "completed") {
@@ -544,52 +578,93 @@ class ChatViewModel(
                     )
                 }
                 streamingMessageId = terminalMessageId
-                if (event.status == "completed") {
-                    responseNotificationManager.notifyResponseCompleted(
-                        conversationId = conversationId,
-                        messageId = terminalMessageId,
-                        answer = finalAnswer
-                    )
-                    streamingMessageId = null
-                    _streamState.value = StreamState.Completed(
-                        fullAnswer = finalAnswer,
-                        route = currentRoute,
-                        toolStats = currentToolStats
-                    )
-                } else {
-                    _streamState.value = StreamState.Error(
-                        message = if (event.status == "partial") {
-                            "Response generation was interrupted"
-                        } else {
-                            "Response generation failed"
-                        },
-                        partial = event.status == "partial",
-                        retryable = true,
-                        partialAnswer = finalAnswer,
-                        lastQuestion = lastQuestion
-                    )
+
+                if (typewriter.renderedLength >= finalAnswer.length) {
+                    // Nothing left to animate — finish synchronously as before.
+                    publishStreamingSnapshot(finalAnswer)
+                    completeTerminalUi(finalAnswer, event)
+                    return
                 }
-                // Any tool still CALLING when the stream ends did not finish.
-                if (_toolCalls.value.any { it.status == ToolCallStatus.CALLING }) {
-                    _toolCalls.value = _toolCalls.value.map {
-                        if (it.status == ToolCallStatus.CALLING) it.copy(status = ToolCallStatus.ERROR)
-                        else it
+                // Accelerated terminal drain: strictly per-segment popping (never a
+                // dump). The remaining backlog is spread uniformly across the drain
+                // window at a faster tick rate; the state transition, Room-flow
+                // restart and (via StreamState) the send button all wait until the
+                // drain completes. publishStreamingSnapshot keeps publishing the
+                // growing prefix; observation stays paused, so nothing overwrites it.
+                terminalDrainPending = true
+                drainJob = viewModelScope.launch {
+                    var ticksLeft = (
+                        (TypewriterCadence.TERMINAL_DRAIN_MS + TypewriterCadence.DRAIN_TICK_MS - 1) /
+                            TypewriterCadence.DRAIN_TICK_MS
+                        ).toInt()
+                    while (isActive && ticksLeft > 0) {
+                        typewriter.onDrainTick(accumulatedAnswer, ticksLeft)?.let { rendered ->
+                            publishStreamingSnapshot(accumulatedAnswer.substring(0, rendered))
+                        }
+                        if (typewriter.renderedLength >= finalAnswer.length) break
+                        ticksLeft--
+                        delay(TypewriterCadence.DRAIN_TICK_MS)
                     }
-                }
-                _activeRoute.value = currentRoute
-                _traceLines.value = emptyList()
-                startMessageObservation()
-                // Show completion indicator briefly
-                if (event.status == "completed") {
-                    _justCompleted.value = true
-                    kotlinx.coroutines.delay(2500)
-                    _justCompleted.value = false
+                    // Exact terminal content — identical to what Room holds.
+                    publishStreamingSnapshot(finalAnswer)
+                    terminalDrainPending = false
+                    completeTerminalUi(finalAnswer, event)
                 }
             }
 
             is SseEvent.Error -> {
                 persistTerminalFailure(event.message, event.retryable)
             }
+        }
+    }
+
+    /**
+     * Terminal UI sequence after Done, shared by the instant path (no backlog)
+     * and the accelerated-drain path: notification, state transition, tool-call
+     * cleanup, Room-observation restart, and the completion indicator. Order
+     * preserved from the pre-drain Done branch.
+     */
+    private suspend fun completeTerminalUi(finalAnswer: String, event: SseEvent.Done) {
+        if (event.status == "completed") {
+            responseNotificationManager.notifyResponseCompleted(
+                conversationId = conversationId,
+                messageId = checkNotNull(streamingMessageId),
+                answer = finalAnswer
+            )
+            streamingMessageId = null
+            _streamState.value = StreamState.Completed(
+                fullAnswer = finalAnswer,
+                route = currentRoute,
+                toolStats = currentToolStats
+            )
+        } else {
+            _streamState.value = StreamState.Error(
+                message = if (event.status == "partial") {
+                    "Response generation was interrupted"
+                } else {
+                    "Response generation failed"
+                },
+                partial = event.status == "partial",
+                retryable = true,
+                partialAnswer = finalAnswer,
+                lastQuestion = lastQuestion
+            )
+        }
+        // Any tool still CALLING when the stream ends did not finish.
+        if (_toolCalls.value.any { it.status == ToolCallStatus.CALLING }) {
+            _toolCalls.value = _toolCalls.value.map {
+                if (it.status == ToolCallStatus.CALLING) it.copy(status = ToolCallStatus.ERROR)
+                else it
+            }
+        }
+        _activeRoute.value = currentRoute
+        _traceLines.value = emptyList()
+        startMessageObservation()
+        // Show completion indicator briefly
+        if (event.status == "completed") {
+            _justCompleted.value = true
+            kotlinx.coroutines.delay(2500)
+            _justCompleted.value = false
         }
     }
 
@@ -606,6 +681,11 @@ class ChatViewModel(
      * malformed or mismatched done metadata, SSE error events, and transport loss.
      */
     private suspend fun persistTerminalFailure(message: String, retryable: Boolean) {
+        // Done already terminalized this stream (Room holds the full answer) and
+        // the accelerated drain will complete the terminal UI itself. A trailing
+        // transport error / SSE error event inside the drain window must not
+        // downgrade the row to partial nor publish over the draining prefix.
+        if (terminalDrainPending) return
         // First statement, before any suspend point — same terminal-race guard
         // as the Done branch (no tick may outlive the terminal full publish).
         stopTypewriterRendering()

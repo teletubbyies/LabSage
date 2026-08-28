@@ -274,13 +274,10 @@ class TypewriterBenchmarkTest {
                 Long.MAX_VALUE
             }
             if (arrivalTime == Long.MAX_VALUE) {
-                // Arrivals exhausted. Control has no ticks; typewriter drains
-                // the remaining backlog (bounded by MAX_DRAIN_TICKS).
-                if (arm != ArmConfig.TYPEWRITER) break
-                if (renderedSoFar >= answer.length) break
-                check(tickTime <= lastArrivalMs + MAX_DRAIN_TICKS * TypewriterCadence.TICK_MS) {
-                    "typewriter drain exceeded $MAX_DRAIN_TICKS ticks"
-                }
+                // Arrivals exhausted — model Done here. Control has no ticks; the
+                // typewriter arm's remaining backlog is consumed by the accelerated
+                // terminal drain right after this loop (not at the normal rate).
+                break
             }
 
             if (arrivalTime <= tickTime) {
@@ -314,10 +311,32 @@ class TypewriterBenchmarkTest {
                     snapshotNanos += SystemClock.elapsedRealtimeNanos() - started
                     uniqueSnapshots++
                     copiedChars += prefix.length
-                    if (arrivalTime == Long.MAX_VALUE) drainTicks++
                     publish(prefix, nowMs)
                 }
                 tickIndex++
+            }
+        }
+        // ---- Terminal accelerated drain (typewriter arm; models post-Done) ----
+        // The remaining equilibrium backlog pops uniformly within the drain window
+        // at the faster drain tick — strictly per-segment, never a dump. Room ops
+        // are untouched by the drain (already finalized), keeping both arms equal.
+        if (arm == ArmConfig.TYPEWRITER && renderedSoFar < answer.length) {
+            var ticksLeft = (
+                (TypewriterCadence.TERMINAL_DRAIN_MS + TypewriterCadence.DRAIN_TICK_MS - 1) /
+                    TypewriterCadence.DRAIN_TICK_MS
+                ).toInt()
+            while (ticksLeft > 0) {
+                val rendered = typewriter.onDrainTick(answer, ticksLeft) ?: break
+                renderedSoFar = rendered
+                val started = SystemClock.elapsedRealtimeNanos()
+                val prefix = answer.substring(0, rendered)
+                snapshotNanos += SystemClock.elapsedRealtimeNanos() - started
+                uniqueSnapshots++
+                copiedChars += prefix.length
+                drainTicks++
+                // Virtual time just past Done — excluded from the steady window.
+                publish(prefix, lastArrivalMs + 100L)
+                ticksLeft--
             }
         }
         if (arm == ArmConfig.TYPEWRITER) {
@@ -478,7 +497,6 @@ class TypewriterBenchmarkTest {
         const val WARMUP_ROUNDS = 5
         const val MEASURED_ROUNDS = 30
         const val BURST_REPEATS = 3
-        const val MAX_DRAIN_TICKS = 2_000
 
         /** (stallMs, burstChunks): the stall-burst shape that motivates the change. */
         val BURST_SCHEDULE = listOf(
