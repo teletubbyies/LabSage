@@ -63,7 +63,7 @@ class LabSageApplication : Application() {
     // ============================================================
 
     // 创建一个与应用进程生命周期绑定的协程作用域，用于执行不依赖具体Activity/VM的全局后台任务
-    // SupervisorJob的特点：子协程失败，不会自动取消其它兄弟协程；但不会自动处理异常
+    // SupervisorJob的特点：子协程失败，不会自动取消其它兄弟协程与父协程；但不会自动处理异常
     // Default适合计算密集任务
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 

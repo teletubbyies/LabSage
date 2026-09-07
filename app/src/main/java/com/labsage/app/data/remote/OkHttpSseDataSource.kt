@@ -44,7 +44,7 @@ class OkHttpSseDataSource(
         val httpRequest = Request.Builder()
             .url("$baseUrl/api/chat_stream")
             .post(jsonBody.toRequestBody(jsonMediaType))
-            .header("Accept", "text/event-stream")
+            .header("Accept", "text/event-stream") // 构建sse请求头
             .build()
 
         val factory = EventSources.createFactory(sseClient)
@@ -81,6 +81,7 @@ class OkHttpSseDataSource(
                 }
                 // Attempts to add the specified element to this channel without waiting.
                 //trySend never suspends and never throws exceptions.
+                // 同步尝试入队，成功与否当场返回
                 val delivery = trySend(event)
                 if (delivery.isFailure) {
                     eventSource.cancel()
@@ -121,6 +122,8 @@ class OkHttpSseDataSource(
             }
         })
 
+        // callbackFlow一定要配合awaitClose，否则会报错。
+        // awaitClose在这里一是防止sse迅速结束，二是关闭连接防止资源泄漏
         awaitClose {
             eventSource.cancel()
         }

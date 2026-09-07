@@ -103,8 +103,8 @@ class AuthRepository(
     }
 
     fun accessTokenFor(requestUrl: HttpUrl): String? {
-        val session = sessionStore.load() ?: return null
-        val serverBaseUrl = session.serverBaseUrl?.takeIf { it.isNotBlank() } ?: return null
+        val session = sessionStore.load() ?: return null // ① 没登录过（本地没有保存的会话）
+        val serverBaseUrl = session.serverBaseUrl?.takeIf { it.isNotBlank() } ?: return null // ② 登录了但没记录
         return session.tokens.accessToken.takeIf { sameOrigin(serverBaseUrl.toHttpUrl(), requestUrl) }
     }
 
