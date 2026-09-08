@@ -5,8 +5,10 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.labsage.app.data.local.dao.ConversationDao
+import com.labsage.app.data.local.dao.HistoryCursorDao
 import com.labsage.app.data.local.dao.MessageDao
 import com.labsage.app.data.local.entity.ConversationEntity
+import com.labsage.app.data.local.entity.HistoryCursorEntity
 import com.labsage.app.data.local.entity.MessageEntity
 import java.nio.charset.StandardCharsets
 import java.util.UUID
@@ -14,21 +16,24 @@ import java.util.UUID
 /**
  * Room database for LabSage.
  *
- * Two tables:
- *   - conversations: session metadata (title, timestamps, pinned flag)
- *   - messages:      individual chat messages, FK-linked to conversations
+ * Three tables:
+ *   - conversations:   session metadata (title, timestamps, pinned flag)
+ *   - messages:        individual chat messages, FK-linked to conversations
+ *   - history_cursors: sync high-water marks, committed with the pages they summarize
  */
 @Database(
     entities = [
         ConversationEntity::class,
-        MessageEntity::class
+        MessageEntity::class,
+        HistoryCursorEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDao
     abstract fun messageDao(): MessageDao
+    abstract fun historyCursorDao(): HistoryCursorDao
 
     companion object {
         /**
@@ -171,6 +176,32 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL(
                     "CREATE INDEX IF NOT EXISTS index_conversations_owner_server_key " +
                         "ON conversations(owner_server_key)"
+                )
+            }
+        }
+
+        /**
+         * v5 → v6: move history-sync cursors from Preferences DataStore into Room.
+         *
+         * Old DataStore keys are SHA-256 hashes, so their values cannot be
+         * recovered here. The first sync after this migration therefore runs
+         * full — safe by the sync's own "prefer duplicate over loss" rule.
+         */
+        val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS history_cursors (
+                        scope TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        conversation_id TEXT NOT NULL,
+                        server_key TEXT NOT NULL,
+                        cursor INTEGER NOT NULL,
+                        PRIMARY KEY(scope, user_id, conversation_id)
+                    )""".trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_history_cursors_user_id " +
+                        "ON history_cursors(user_id)"
                 )
             }
         }

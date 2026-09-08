@@ -7,6 +7,7 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.labsage.app.data.local.entity.HistoryCursorEntity
 import com.labsage.app.data.local.entity.MessageEntity
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -72,7 +73,8 @@ class AppDatabaseMigrationTest {
             .addMigrations(
                 AppDatabase.MIGRATION_2_3,
                 AppDatabase.MIGRATION_3_4,
-                AppDatabase.MIGRATION_4_5
+                AppDatabase.MIGRATION_4_5,
+                AppDatabase.MIGRATION_5_6
             )
             .build()
         val db = room.openHelper.writableDatabase // Opens, migrates, and validates latest schema.
@@ -158,6 +160,22 @@ class AppDatabaseMigrationTest {
         db.query("SELECT COUNT(*) FROM messages").use { cursor ->
             assertTrue(cursor.moveToFirst())
             assertEquals(0L, cursor.getLong(0))
+        }
+
+        // The v5 → v6 step adds the cursor table; it must be usable right away.
+        runBlocking {
+            room.historyCursorDao().upsert(
+                HistoryCursorEntity.conversationsCursor("migration-user", "server-a", 12)
+            )
+            assertEquals(
+                12L,
+                room.historyCursorDao().findBound(
+                    HistoryCursorEntity.SCOPE_CONVERSATIONS,
+                    "migration-user",
+                    "",
+                    "server-a"
+                )?.cursor
+            )
         }
         room.close()
     }

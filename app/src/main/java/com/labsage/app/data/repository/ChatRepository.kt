@@ -13,7 +13,7 @@ import com.labsage.app.data.remote.*
 import com.labsage.app.data.sync.HistoryRemoteSource
 import com.labsage.app.data.sync.HistoryPage
 import com.labsage.app.data.sync.HistorySyncCoordinator
-import com.labsage.app.data.sync.DataStoreHistoryCursorStore
+import com.labsage.app.data.sync.RoomHistoryCursorStore
 import com.labsage.app.data.sync.DataStoreLegacyImportCompletionStore
 import com.labsage.app.data.sync.LegacyHistoryImportCoordinator
 import com.labsage.app.data.sync.LegacyImportBinding
@@ -59,7 +59,7 @@ class ChatRepository(
     }
 
     private val historySyncStore = RoomHistorySyncStore(database)
-    private val historyCursorStore = DataStoreHistoryCursorStore(app)
+    private val historyCursorStore = RoomHistoryCursorStore(database)
     private val legacyImportCoordinator = LegacyHistoryImportCoordinator(
         remote = LegacyImportRemoteSource { binding, request ->
             check(isLegacyImportBindingCurrent(binding))
@@ -612,10 +612,10 @@ class ChatRepository(
         conversation: ConversationDto
     ) {
         app.authRepository.withStableSessionBinding(binding.userId, binding.serverKey) {
-            historySyncStore.mergeConversations(
+            historySyncStore.applyConversationMutation(
                 binding.userId,
                 binding.serverKey,
-                listOf(conversation)
+                conversation
             )
         }
     }

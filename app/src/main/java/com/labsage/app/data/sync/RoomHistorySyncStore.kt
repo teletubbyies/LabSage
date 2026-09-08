@@ -3,6 +3,7 @@ package com.labsage.app.data.sync
 import androidx.room.withTransaction
 import com.labsage.app.data.local.AppDatabase
 import com.labsage.app.data.local.entity.ConversationEntity
+import com.labsage.app.data.local.entity.HistoryCursorEntity
 import com.labsage.app.data.local.entity.MessageEntity
 import com.labsage.app.data.remote.ConversationDto
 import com.labsage.app.data.remote.LegacyConversationDto
@@ -60,38 +61,77 @@ class RoomHistorySyncStore(
     suspend fun claimLegacyConversations(userId: String) =
         claimLegacyConversations(userId, "server-a")
 
-    suspend fun syncConversations(userId: String, remote: List<ConversationDto>) =
-        syncConversations(userId, "server-a", remote)
+    suspend fun syncConversations(
+        userId: String,
+        remote: List<ConversationDto>,
+        nextCursor: Long
+    ) = syncConversations(userId, "server-a", remote, nextCursor)
 
     suspend fun syncConversations(
         userId: String,
         serverKey: String,
         remote: List<ConversationDto>,
+        nextCursor: Long,
         replaceSyncedCache: Boolean = false
     ) {
+        require(nextCursor >= 0) { "History cursor must be non-negative" }
         database.withTransaction {
+            val dao = database.conversationDao()
             if (replaceSyncedCache) {
                 // A different backend may reuse the same user/conversation IDs.
                 // Remove its server-owned cache only after the new full page arrived.
-                database.conversationDao().deleteOtherServerRows(userId, serverKey)
+                dao.getOtherServerIds(userId, serverKey)
+                    .chunked(SQLITE_SAFE_BATCH_SIZE)
+                    .forEach {
+                        database.historyCursorDao().deleteMessageCursors(userId, it)
+                    }
+                dao.deleteOtherServerRows(userId, serverKey)
             }
             upsertConversations(userId, serverKey, remote)
-            val dao = database.conversationDao()
             val serverIds = remote.mapTo(hashSetOf()) { it.id }
-            dao.getSyncedIds(userId, serverKey)
+            val removedIds = dao.getSyncedIds(userId, serverKey)
                 .filterNot(serverIds::contains)
+            removedIds
                 .chunked(SQLITE_SAFE_BATCH_SIZE)
                 .forEach { dao.deleteSyncedByIds(userId, it, serverKey) }
+            removedIds
+                .chunked(SQLITE_SAFE_BATCH_SIZE)
+                .forEach { database.historyCursorDao().deleteMessageCursors(userId, it) }
+            // The cursor advances in the same transaction as the page merge,
+            // so a crash can never leave the cursor ahead of the cached data.
+            database.historyCursorDao().upsert(
+                HistoryCursorEntity.conversationsCursor(userId, serverKey, nextCursor)
+            )
         }
     }
 
     suspend fun mergeConversations(
         userId: String,
         serverKey: String,
-        remote: List<ConversationDto>
+        remote: List<ConversationDto>,
+        nextCursor: Long
     ) {
+        require(nextCursor >= 0) { "History cursor must be non-negative" }
         database.withTransaction {
             upsertConversations(userId, serverKey, remote)
+            database.historyCursorDao().upsert(
+                HistoryCursorEntity.conversationsCursor(userId, serverKey, nextCursor)
+            )
+        }
+    }
+
+    /**
+     * Merges one authoritative conversation row (e.g. a PATCH response) without
+     * advancing the cursor: this row was seen out of band, not as a synced page,
+     * so the next incremental fetch may idly re-deliver it.
+     */
+    suspend fun applyConversationMutation(
+        userId: String,
+        serverKey: String,
+        conversation: ConversationDto
+    ) {
+        database.withTransaction {
+            upsertConversations(userId, serverKey, listOf(conversation))
         }
     }
 
@@ -99,11 +139,13 @@ class RoomHistorySyncStore(
         userId: String,
         serverKey: String,
         conversationId: String,
-        remote: List<MessageDto>
+        remote: List<MessageDto>,
+        nextCursor: Long
     ) {
         require(remote.all { it.conversationId == conversationId }) {
             "Message sync response crossed conversation boundaries"
         }
+        require(nextCursor >= 0) { "History cursor must be non-negative" }
         database.withTransaction {
             upsertMessages(userId, serverKey, conversationId, remote)
             val dao = database.messageDao()
@@ -112,26 +154,35 @@ class RoomHistorySyncStore(
                 .filterNot(serverIds::contains)
                 .chunked(SQLITE_SAFE_BATCH_SIZE)
                 .forEach { dao.deleteSyncedByIds(conversationId, it) }
+            database.historyCursorDao().upsert(
+                HistoryCursorEntity.messagesCursor(userId, serverKey, conversationId, nextCursor)
+            )
         }
     }
 
     suspend fun syncMessages(
         userId: String,
         conversationId: String,
-        remote: List<MessageDto>
-    ) = syncMessages(userId, "server-a", conversationId, remote)
+        remote: List<MessageDto>,
+        nextCursor: Long
+    ) = syncMessages(userId, "server-a", conversationId, remote, nextCursor)
 
     suspend fun mergeMessages(
         userId: String,
         serverKey: String,
         conversationId: String,
-        remote: List<MessageDto>
+        remote: List<MessageDto>,
+        nextCursor: Long
     ) {
         require(remote.all { it.conversationId == conversationId }) {
             "Message sync response crossed conversation boundaries"
         }
+        require(nextCursor >= 0) { "History cursor must be non-negative" }
         database.withTransaction {
             upsertMessages(userId, serverKey, conversationId, remote)
+            database.historyCursorDao().upsert(
+                HistoryCursorEntity.messagesCursor(userId, serverKey, conversationId, nextCursor)
+            )
         }
     }
 

@@ -78,4 +78,8 @@ interface ConversationDao {
 
     @Query("DELETE FROM conversations WHERE owner_user_id = :userId AND owner_server_key != :serverKey")
     suspend fun deleteOtherServerRows(userId: String, serverKey: String)
+
+    /** Ids cached for this account under a different backend, mirroring [deleteOtherServerRows]. */
+    @Query("SELECT id FROM conversations WHERE owner_user_id = :userId AND owner_server_key != :serverKey")
+    suspend fun getOtherServerIds(userId: String, serverKey: String): List<String>
 }

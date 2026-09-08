@@ -73,12 +73,13 @@ class HistorySyncCoordinator(
             val page = remote.getMessages(userId, serverKey, conversationId, cursor)
             validatePage(page, cursor) { it.syncVersion }
             commitWithStableBinding(userId, serverKey) {
+                // The store merges the page and advances its cursor in one Room
+                // transaction, so the cursor can never outrun the cached data.
                 if (cursor == null) {
-                    local.syncMessages(userId, serverKey, conversationId, page.items)
+                    local.syncMessages(userId, serverKey, conversationId, page.items, page.nextCursor)
                 } else {
-                    local.mergeMessages(userId, serverKey, conversationId, page.items)
+                    local.mergeMessages(userId, serverKey, conversationId, page.items, page.nextCursor)
                 }
-                cursors.setMessagesCursor(userId, serverKey, conversationId, page.nextCursor)
             }
         }
 
@@ -92,8 +93,8 @@ class HistorySyncCoordinator(
         local.claimLegacyConversations(userId, serverKey)
         val cacheBound = cursors.isConversationsCacheBound(userId, serverKey)
         if (!cacheBound) {
-            // Hide a different backend's cache before network I/O. Cursors are
-            // retained for diagnostics/re-entry but cannot be reused while unbound.
+            // Hide a different backend's cache before network I/O. Invalidating
+            // drops the account's cursor rows, so the next commits run full.
             commitWithStableBinding(userId, serverKey) {
                 cursors.invalidateCacheBinding(userId)
             }
@@ -107,17 +108,19 @@ class HistorySyncCoordinator(
         val page = remote.getConversations(userId, serverKey, cursor)
         validatePage(page, cursor) { it.syncVersion }
         commitWithStableBinding(userId, serverKey) {
+            // The store merges the page and advances its cursor in one Room
+            // transaction, so the cursor can never outrun the cached data.
             if (cursor == null) {
                 local.syncConversations(
                     userId,
                     serverKey,
                     page.items,
+                    page.nextCursor,
                     replaceSyncedCache = !cacheBound
                 )
             } else {
-                local.mergeConversations(userId, serverKey, page.items)
+                local.mergeConversations(userId, serverKey, page.items, page.nextCursor)
             }
-            cursors.setConversationsCursor(userId, serverKey, page.nextCursor)
         }
     }
 

@@ -6,13 +6,11 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.labsage.app.data.local.AppDatabase
 import com.labsage.app.data.local.entity.ConversationEntity
+import com.labsage.app.data.local.entity.HistoryCursorEntity
 import com.labsage.app.data.local.entity.MessageEntity
 import com.labsage.app.data.remote.ConversationDto
 import com.labsage.app.data.remote.MessageDto
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -54,8 +52,8 @@ class HistoryFullSyncTest {
         assertEquals(setOf("cached-a", "legacy"), offlineAfterClaim.map { it.id }.toSet())
 
         val remote = listOf(remoteConversation("server-a", syncVersion = 10))
-        store.syncConversations("user-a", remote)
-        store.syncConversations("user-a", remote)
+        store.syncConversations("user-a", remote, nextCursor = 10)
+        store.syncConversations("user-a", remote, nextCursor = 10)
 
         val userA = conversations.getAllConversations("user-a").first()
         assertEquals(setOf("legacy", "server-a"), userA.map { it.id }.toSet())
@@ -79,8 +77,8 @@ class HistoryFullSyncTest {
         )
         val remote = listOf(remoteMessage("server-message", "conversation-a", syncVersion = 8))
 
-        store.syncMessages("user-a", "conversation-a", remote)
-        store.syncMessages("user-a", "conversation-a", remote)
+        store.syncMessages("user-a", "conversation-a", remote, nextCursor = 8)
+        store.syncMessages("user-a", "conversation-a", remote, nextCursor = 8)
 
         val messages = database.messageDao()
             .getMessagesByConversation("user-a", "conversation-a").first()
@@ -88,7 +86,9 @@ class HistoryFullSyncTest {
         assertEquals(8L, messages.single { it.id == "server-message" }.syncVersion)
 
         val invalid = remote + remoteMessage("wrong", "other-conversation", syncVersion = 9)
-        val failure = runCatching { store.syncMessages("user-a", "conversation-a", invalid) }
+        val failure = runCatching {
+            store.syncMessages("user-a", "conversation-a", invalid, nextCursor = 9)
+        }
         assertTrue(failure.isFailure)
         assertEquals(
             setOf("local-message", "server-message"),
@@ -199,7 +199,7 @@ class HistoryFullSyncTest {
                 }
             },
             local = store,
-            cursors = InMemoryHistoryCursorStore()
+            cursors = RoomHistoryCursorStore(database)
         )
 
         coordinator.syncMessages("user-a", "server-a", "deep-link-conversation")
@@ -222,7 +222,7 @@ class HistoryFullSyncTest {
     @Test
     fun conversationCursorAdvancesAfterRoomAndReplayIsIdempotent() = runBlocking {
         val requests = mutableListOf<Long?>()
-        val cursorStore = InMemoryHistoryCursorStore()
+        val cursorStore = RoomHistoryCursorStore(database)
         var call = 0
         val coordinator = HistorySyncCoordinator(
             remote = object : HistoryRemoteSource {
@@ -270,7 +270,7 @@ class HistoryFullSyncTest {
     @Test
     fun failedRoomMergeDoesNotAdvanceConversationCursor() = runBlocking {
         val requests = mutableListOf<Long?>()
-        val cursorStore = InMemoryHistoryCursorStore()
+        val cursorStore = RoomHistoryCursorStore(database)
         database.conversationDao().insert(conversation("foreign-id", "user-b", syncVersion = 8))
         var call = 0
         val coordinator = HistorySyncCoordinator(
@@ -316,7 +316,7 @@ class HistoryFullSyncTest {
     fun switchingServersWithSameUserForcesConversationAndMessageFullSync() = runBlocking {
         val conversationRequests = mutableListOf<Pair<String, Long?>>()
         val messageRequests = mutableListOf<Pair<String, Long?>>()
-        val cursorStore = InMemoryHistoryCursorStore()
+        val cursorStore = RoomHistoryCursorStore(database)
         val coordinator = HistorySyncCoordinator(
             remote = object : HistoryRemoteSource {
                 override suspend fun getConversations(
@@ -402,10 +402,14 @@ class HistoryFullSyncTest {
     @Test
     fun serverSwitchFailureInvalidatesVisibilityButSameServerFailureKeepsOfflineCache() =
         runBlocking {
-            val cursorStore = InMemoryHistoryCursorStore()
+            val cursorStore = RoomHistoryCursorStore(database)
             database.conversationDao().insert(conversation("cached-a", "same-user", 10))
-            cursorStore.setConversationsCursor("same-user", "server-a", 10)
-            cursorStore.setMessagesCursor("same-user", "server-a", "cached-a", 11)
+            database.historyCursorDao().upsert(
+                HistoryCursorEntity.conversationsCursor("same-user", "server-a", 10)
+            )
+            database.historyCursorDao().upsert(
+                HistoryCursorEntity.messagesCursor("same-user", "server-a", "cached-a", 11)
+            )
 
             fun failingCoordinator(server: String) = HistorySyncCoordinator(
                 remote = object : HistoryRemoteSource {
@@ -439,7 +443,9 @@ class HistoryFullSyncTest {
                 database.conversationDao().getAllConversations("same-user").first().map { it.id }
             )
 
-            cursorStore.setConversationsCursor("same-user", "server-a", 10)
+            database.historyCursorDao().upsert(
+                HistoryCursorEntity.conversationsCursor("same-user", "server-a", 10)
+            )
             assertTrue(runCatching {
                 failingCoordinator("server-a").syncConversations("same-user", "server-a")
             }.isFailure)
@@ -447,9 +453,13 @@ class HistoryFullSyncTest {
         }
 
     @Test
-    fun cursorWriteFailureLeavesCacheUnboundAndForcesFullOnPreviousServer() = runBlocking {
+    fun failedCommitRollsBackCacheReplacementAndCursorAdvance() = runBlocking {
         val requests = mutableListOf<Pair<String, Long?>>()
-        val cursorStore = InMemoryHistoryCursorStore()
+        val cursorStore = RoomHistoryCursorStore(database)
+        // The server-b page reuses an id that another account already owns, so
+        // the commit fails inside the Room transaction that would also replace
+        // the previous backend's cache and advance the cursor.
+        database.conversationDao().insert(conversation("foreign-id", "user-b", syncVersion = 8))
         val coordinator = HistorySyncCoordinator(
             remote = object : HistoryRemoteSource {
                 override suspend fun getConversations(
@@ -458,12 +468,19 @@ class HistoryFullSyncTest {
                     updatedAfter: Long?
                 ): HistoryPage<ConversationDto> {
                     requests += serverKey to updatedAfter
-                    val version = if (serverKey == "server-a") 10L else 20L
-                    return HistoryPage(
-                        listOf(remoteConversation("shared", version)),
-                        version,
-                        version * 100
-                    )
+                    return if (serverKey == "server-a") {
+                        HistoryPage(
+                            listOf(remoteConversation("owned", syncVersion = 10)),
+                            10,
+                            1_000
+                        )
+                    } else {
+                        HistoryPage(
+                            listOf(remoteConversation("foreign-id", syncVersion = 20)),
+                            20,
+                            2_000
+                        )
+                    }
                 }
 
                 override suspend fun getMessages(
@@ -478,12 +495,21 @@ class HistoryFullSyncTest {
         )
 
         coordinator.syncConversations("same-user", "server-a")
-        cursorStore.failNextConversationSet = true
+        assertEquals(10L, cursorStore.getConversationsCursor("same-user", "server-a"))
+
         assertTrue(runCatching {
             coordinator.syncConversations("same-user", "server-b")
         }.isFailure)
-        assertFalse(cursorStore.isConversationsCacheBound("same-user", "server-a"))
-        assertFalse(cursorStore.isConversationsCacheBound("same-user", "server-b"))
+        // The failed commit wrote nothing: no cursor row exists for either
+        // backend (the switch invalidated the account), and the cache
+        // replacement that ran inside the rolled-back transaction was undone.
+        assertEquals(null, cursorStore.getConversationsCursor("same-user", "server-b"))
+        assertEquals(null, cursorStore.getConversationsCursor("same-user", "server-a"))
+        assertEquals(
+            listOf("owned"),
+            database.conversationDao().getAllConversations("same-user").first().map { it.id }
+        )
+
         coordinator.syncConversations("same-user", "server-a")
 
         assertEquals(
@@ -512,6 +538,7 @@ class HistoryFullSyncTest {
             userId = "same-user",
             serverKey = "server-b",
             remote = emptyList(),
+            nextCursor = 0,
             replaceSyncedCache = true
         )
         assertTrue(
@@ -566,8 +593,8 @@ class HistoryFullSyncTest {
             deletedAt = 300
         )
 
-        store.mergeConversations("user-a", "server-a", listOf(tombstone))
-        store.mergeConversations("user-a", "server-a", listOf(tombstone))
+        store.mergeConversations("user-a", "server-a", listOf(tombstone), nextCursor = 22)
+        store.mergeConversations("user-a", "server-a", listOf(tombstone), nextCursor = 22)
 
         assertTrue(database.conversationDao().getAllConversations("user-a").first().isEmpty())
         val cached = database.conversationDao().getById("user-a", conversationId)
@@ -620,7 +647,8 @@ class HistoryFullSyncTest {
         val result = runCatching {
             store.syncConversations(
                 "user-b",
-                listOf(remoteConversation("shared-conversation", syncVersion = 10))
+                listOf(remoteConversation("shared-conversation", syncVersion = 10)),
+                nextCursor = 10
             )
         }
 
@@ -663,7 +691,8 @@ class HistoryFullSyncTest {
                 "conversation-b",
                 listOf(
                     remoteMessage("shared-message-id", "conversation-b", syncVersion = 12)
-                )
+                ),
+                nextCursor = 12
             )
         }
 
@@ -705,7 +734,8 @@ class HistoryFullSyncTest {
                         content = "",
                         clientRequestId = "shared-request"
                     )
-            )
+            ),
+            nextCursor = 7
         )
         var rows = messages.getMessagesByConversation("user-a", "conversation-a").first()
         assertEquals(listOf("local-assistant"), rows.map { it.id })
@@ -737,7 +767,8 @@ class HistoryFullSyncTest {
             listOf(
                 remoteMessage("server-assistant", "conversation-a", syncVersion = 7)
                     .copy(status = "streaming", content = "")
-            )
+            ),
+            nextCursor = 7
         )
 
         val chosenId = messages.insertOrReuseAssistantOwned(
@@ -796,7 +827,8 @@ class HistoryFullSyncTest {
                             content = if (remoteStatus == "completed") "server answer" else "server partial",
                             clientRequestId = requestId
                         )
-                    )
+                    ),
+                    nextCursor = 7
                 )
 
                 // Model a stale Continue coroutine even when a completed server
@@ -859,7 +891,8 @@ class HistoryFullSyncTest {
                     content = "",
                     clientRequestId = "restore-request"
                 )
-            )
+            ),
+            nextCursor = 9
         )
         messages.finalizeMessage("user-a", "restored-local", "finished", "direct")
         messages.adoptServerIdentity(
@@ -900,7 +933,8 @@ class HistoryFullSyncTest {
                     content = "authoritative answer",
                     clientRequestId = "shared-request"
                 )
-            )
+            ),
+            nextCursor = 9
         )
         // This is the delayed write launched by restorePartialStateIfAny.
         messages.markTerminal(
@@ -932,7 +966,8 @@ class HistoryFullSyncTest {
                     content = "authoritative answer",
                     clientRequestId = "late-request"
                 )
-            )
+            ),
+            nextCursor = 11
         )
 
         val chosenId = messages.insertOrReuseAssistantOwned(
@@ -983,7 +1018,8 @@ class HistoryFullSyncTest {
                         content = "authoritative $lateStatus answer",
                         clientRequestId = "no-chunk-request-$lateStatus"
                     )
-                )
+                ),
+                nextCursor = 15
             )
 
             messages.mergeTerminalOwned(
@@ -1038,67 +1074,4 @@ class HistoryFullSyncTest {
         createdAt = 110,
         updatedAt = 120
     )
-}
-
-private class InMemoryHistoryCursorStore : HistoryCursorStore {
-    private val values = mutableMapOf<String, Long>()
-    private val bindings = MutableStateFlow<Map<String, String>>(emptyMap())
-    var failNextConversationSet = false
-
-    override suspend fun invalidateCacheBinding(userId: String) {
-        bindings.value = bindings.value - "c:$userId" - "mg:$userId"
-    }
-
-    override fun observeConversationsCacheBound(
-        userId: String,
-        serverKey: String
-    ): Flow<Boolean> = bindings.map { it["c:$userId"] == serverKey }
-
-    override suspend fun isConversationsCacheBound(userId: String, serverKey: String): Boolean =
-        bindings.value["c:$userId"] == serverKey
-
-    override suspend fun getConversationsCursor(userId: String, serverKey: String): Long? =
-        values["c:$serverKey:$userId"]
-
-    override suspend fun setConversationsCursor(userId: String, serverKey: String, cursor: Long) {
-        if (failNextConversationSet) {
-            failNextConversationSet = false
-            error("cursor write failed")
-        }
-        bindings.value = bindings.value + ("c:$userId" to serverKey)
-        values["c:$serverKey:$userId"] = cursor
-    }
-
-    override suspend fun isMessagesCacheBound(
-        userId: String,
-        serverKey: String,
-        conversationId: String
-    ): Boolean = bindings.value["mg:$userId"] == serverKey &&
-        bindings.value["m:$userId:$conversationId"] == serverKey
-
-    override fun observeMessagesCacheBound(
-        userId: String,
-        serverKey: String,
-        conversationId: String
-    ): Flow<Boolean> = bindings.map {
-        it["mg:$userId"] == serverKey && it["m:$userId:$conversationId"] == serverKey
-    }
-
-    override suspend fun getMessagesCursor(
-        userId: String,
-        serverKey: String,
-        conversationId: String
-    ): Long? = values["m:$serverKey:$userId:$conversationId"]
-
-    override suspend fun setMessagesCursor(
-        userId: String,
-        serverKey: String,
-        conversationId: String,
-        cursor: Long
-    ) {
-        bindings.value = bindings.value +
-            ("mg:$userId" to serverKey) +
-            ("m:$userId:$conversationId" to serverKey)
-        values["m:$serverKey:$userId:$conversationId"] = cursor
-    }
 }
