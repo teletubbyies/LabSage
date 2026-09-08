@@ -154,13 +154,22 @@ class LabSageApplication : Application() {
             .build()
     }
 
-    /** OkHttp client for SSE — no read timeout (stream is long-lived), headers-only logging */
+    /**
+     * OkHttp client for SSE — bounded read timeout kept alive by the server heartbeat,
+     * headers-only logging. The backend sends a ": ping" SSE comment line every 25s
+     * during idle phases (model thinking, tool execution). Comment lines are dropped
+     * by okhttp-sse before reaching onEvent, but each arrival completes a socket read
+     * and grants a fresh full window — so a bounded readTimeout never kills a healthy
+     * stream, while a silently dead connection (NAT reaping, network switch) raises
+     * SocketTimeoutException after 90s (~3 heartbeats) → onFailure → retryable error
+     * → 继续生成 entry, instead of hanging forever with readTimeout=0.
+     */
     val sseOkHttpClient: OkHttpClient by lazy {
         baseOkHttpClient.newBuilder()
             .addInterceptor(accessTokenInterceptor)
             .authenticator(accessTokenAuthenticator)
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS)   // no timeout for SSE
+            .readTimeout(90, TimeUnit.SECONDS)   // ≈3× server heartbeat, see sse.HeartbeatInterval
             .writeTimeout(30, TimeUnit.SECONDS)
             .build()
     }
