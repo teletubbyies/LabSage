@@ -126,7 +126,7 @@ class ChatViewModel(
     private var currentUserMessageId: String? = null
     private var currentClientRequestId: String? = null
     private var currentClientCreatedAt: Long = 0
-    private val accumulatedAnswer = StringBuilder()
+    private val accumulatedAnswer = StringBuilder(2000)
     private val accumulatedTraces = mutableListOf<String>()
     private var currentToolStats = mutableMapOf<String, Int>()
     private var currentRoute: String? = null
