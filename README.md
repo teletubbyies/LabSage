@@ -8,7 +8,7 @@
 
 支持 **AI 流式问答 · 异常状态恢复 · 工具调用过程可视化 · 账号认证 · 历史同步**
 
-[![CI](https://github.com/YOUR_GITHUB_USERNAME/LabSage/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_GITHUB_USERNAME/LabSage/actions/workflows/ci.yml)
+[![CI](https://github.com/teletubbyies/LabSage/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_GITHUB_USERNAME/LabSage/actions/workflows/ci.yml)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.2-7F52FF?logo=kotlin&logoColor=white)
 ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white)
 ![minSdk](https://img.shields.io/badge/minSdk-24-green?logo=android&logoColor=white)
@@ -93,37 +93,6 @@ Kotlin + Jetpack Compose，**MVVM + Repository** 分离 UI、网络与数据层�
 - 仪器测试（`connectedDebugAndroidTest`）需要模拟器/真机；其中 `RealBackendSmokeTest` 与性能基准需要真实后端，故不在 CI 内。
 
 ## 附录
-
-<details>
-<summary><b>更多文档（架构 / 排错 / 契约 / 学习笔记）</b></summary>
-
-| 文档 | 内容 |
-|---|---|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 整体架构、SSE 协议、Room 表设计、关键决策 |
-| [SSE_CADENCE_GRID_REPORT.md](docs/SSE_CADENCE_GRID_REPORT.md) | 50/500 ms 参数网格实测（3×3 组、30 轮） |
-| [UPLOAD_BENCHMARK.md](docs/UPLOAD_BENCHMARK.md) | 流式上传 A/B 实验（180 样本） |
-| [BUGFIX_LOG.md](docs/BUGFIX_LOG.md) | 真实 Bug 复盘（背压丢事件、REPLACE 触发级联删除等） |
-| [files-api-contract.md](docs/files-api-contract.md) · [API_AND_KEY_POINTS.md](docs/API_AND_KEY_POINTS.md) | 接口契约与要点 |
-
-</details>
-
-<details>
-<summary><b>用真机录屏替换演示动画（可选）</b></summary>
-
-```bash
-# 方案 A：scrcpy 录制
-scrcpy --record demo.mp4
-# 方案 B：adb 录屏（≤3 分钟）
-adb shell screenrecord /sdcard/demo.mp4 && adb pull /sdcard/demo.mp4
-
-# 转 GIF（macOS，brew install ffmpeg gifski）
-mkdir frames && ffmpeg -i demo.mp4 -vf "fps=12,scale=480:-1" frames/f%03d.png
-gifski --fps 12 -o docs/assets/demo.gif frames/*.png
-```
-
-录制后把 README 顶部的 `docs/assets/demo.svg` 替换为 `demo.gif` 即可。
-
-</details>
 
 <details>
 <summary><b>项目结构</b></summary>
