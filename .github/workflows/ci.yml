@@ -1,0 +1,61 @@
+# CI：单元测试 → Android Lint → 构建 Debug APK
+#
+# 范围说明：
+#   - androidTest 不在本流水线内：RealBackendSmokeTest 需要真实后端(10.0.2.2:6872)，
+#     perf/* 基准测试需要模拟器且耗时长，无法在无状态的 CI 环境稳定运行。
+#   - 三条命令均已在本地验证通过后才纳入 CI。
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# 同一分支的新推送取消进行中的旧构建，节省 runner 时间
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 单测 · Lint · 构建
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      # Gradle 9.4.1 / AGP 9.2.1 本地使用 JDK 17 运行，CI 保持一致
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 自动缓存 ~/.gradle 依赖，并校验 gradle-wrapper.jar 校验和（防依赖投毒）
+      - name: 安装 Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          validate-wrappers: true
+
+      - name: 单元测试
+        run: ./gradlew :app:testDebugUnitTest
+
+      - name: Android Lint
+        run: ./gradlew :app:lintDebug
+
+      - name: 构建 Debug APK
+        run: ./gradlew :app:assembleDebug
+
+      - name: 失败时上传测试与 Lint 报告
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: app/build/reports/
+
+      - name: 上传 Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 14

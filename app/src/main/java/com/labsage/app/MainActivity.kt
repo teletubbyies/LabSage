@@ -49,7 +49,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        setIntent(intent)
+        setIntent(intent)   // 防止后续再获取intent时拿到旧数据
         notificationDestination = intent.notificationDestination()
     }
 }

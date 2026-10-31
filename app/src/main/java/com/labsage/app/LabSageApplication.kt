@@ -44,7 +44,8 @@ import java.util.concurrent.TimeUnit
  *
  * Two OkHttpClient instances share the same connection pool via newBuilder():
  *   - apiClient: 30s timeouts, body-level logging (for non-streaming endpoints)
- *   - sseClient:  no read timeout, header-level logging only (BODY would buffer the SSE stream)
+ *   - sseClient:  90s read timeout and heart beat to keep alive,
+ *   header-level logging only (BODY would buffer the SSE stream)
  *
  * The backend endpoint is FIXED at build time: BuildConfig.API_BASE_URL, declared per
  * build type in app/build.gradle.kts (industry-standard buildConfigField). It is not
@@ -251,6 +252,7 @@ class LabSageApplication : Application() {
             .addMigrations(AppDatabase.MIGRATION_3_4)
             .addMigrations(AppDatabase.MIGRATION_4_5)
             .addMigrations(AppDatabase.MIGRATION_5_6)
+            .addMigrations(AppDatabase.MIGRATION_6_7)
             .build()
     }
 

@@ -74,10 +74,16 @@ class AppDatabaseMigrationTest {
                 AppDatabase.MIGRATION_2_3,
                 AppDatabase.MIGRATION_3_4,
                 AppDatabase.MIGRATION_4_5,
-                AppDatabase.MIGRATION_5_6
+                AppDatabase.MIGRATION_5_6,
+                AppDatabase.MIGRATION_6_7
             )
             .build()
         val db = room.openHelper.writableDatabase // Opens, migrates, and validates latest schema.
+        db.query("PRAGMA index_info(index_messages_conversation_id_timestamp)").use { cursor ->
+            val columns = mutableListOf<String>()
+            while (cursor.moveToNext()) columns += cursor.getString(2)
+            assertEquals(listOf("conversation_id", "timestamp"), columns)
+        }
 
         val conversationId = db.query(
             "SELECT id, title, is_pinned, version, sync_version, is_deleted, owner_user_id " +

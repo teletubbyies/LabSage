@@ -1,5 +1,6 @@
 package com.labsage.app.ui.chat.components
 
+import android.annotation.SuppressLint
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -22,6 +23,7 @@ import com.labsage.app.R
 import com.labsage.app.ui.theme.LocalExtendedColors
 import dev.jeziellago.compose.markdowntext.MarkdownText
 
+@SuppressLint("UnusedBoxWithConstraintsScope")
 @Composable
 fun MessageBubble(
     role: String,

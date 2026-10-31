@@ -104,7 +104,7 @@ internal class TypewriterCadence(private val horizon: Int = HORIZON) {
         const val TICK_MS = 33L
 
         /** Terminal drain window after Done: remaining backlog pops uniformly within this long. */
-        const val TERMINAL_DRAIN_MS = 500L
+        const val TERMINAL_DRAIN_MS = 1000L
 
         /** Drain-phase tick period — faster than [TICK_MS], so the finish visibly accelerates. */
         const val DRAIN_TICK_MS = 16L

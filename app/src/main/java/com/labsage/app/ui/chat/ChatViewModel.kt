@@ -663,7 +663,7 @@ class ChatViewModel(
         // Show completion indicator briefly
         if (event.status == "completed") {
             _justCompleted.value = true
-            kotlinx.coroutines.delay(2500)
+            delay(2500)
             _justCompleted.value = false
         }
     }

@@ -27,7 +27,7 @@ import java.util.UUID
         MessageEntity::class,
         HistoryCursorEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -202,6 +202,17 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL(
                     "CREATE INDEX IF NOT EXISTS index_history_cursors_user_id " +
                         "ON history_cursors(user_id)"
+                )
+            }
+        }
+
+        /** v6 → v7: read one conversation's messages in timestamp order. */
+        val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP INDEX IF EXISTS index_messages_conversation_id")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_messages_conversation_id_timestamp " +
+                        "ON messages(conversation_id, timestamp)"
                 )
             }
         }
