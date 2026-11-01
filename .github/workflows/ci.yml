@@ -40,6 +40,11 @@ jobs:
       - name: 单元测试
         run: ./gradlew :app:testDebugUnitTest
 
+      # 仪器测试本身需要模拟器/真机，不在 CI 运行；但必须保证其可编译——
+      # DAO/ViewModel 签名变更导致的 androidTest 破损要在这里被拦下。
+      - name: 编译仪器测试
+        run: ./gradlew :app:compileDebugAndroidTestKotlin
+
       - name: Android Lint
         run: ./gradlew :app:lintDebug
 
