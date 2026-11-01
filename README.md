@@ -38,7 +38,7 @@ Kotlin + Jetpack Compose，**MVVM + Repository** 分离 UI、网络与数据层�
 
 ### 3 · 流式链路优化与异常恢复
 
-正文在内存（`StringBuilder`）顺序累积，**UI 发布（50 ms）与 Room 落盘（500 ms）分通道节流**；收到 `done / error` 终态立即落盘，不等节流窗口。进程重启后从 Room 读到 `is_partial = 1` 的残缺正文，**继续生成 = `Continue + PartialAnswer`**，服务端不重复落库。实测 Room 写入次数 **202 → 21（−89.6%）**。
+正文在内存（`StringBuilder`）顺序累积，**UI 发布（50 ms）与 Room 落盘（500 ms）分通道节流**；收到 `done / error` 终态立即落盘，不等节流窗口。进程重启后从 Room 读到 `is_partial = 1` 的残缺正文，**继续生成 = `Continue + PartialAnswer`**，服务端不重复落库。以旧「每 5 chunk 一写」为基线回放**真实录制的 SSE trace**，写入次数降低 **82%–97%**（直答 −81.8%，工具查询簇发 −97.1%）。
 
 > [`SseUpdateCadence.kt`](app/src/main/java/com/labsage/app/ui/chat/SseUpdateCadence.kt) · [`ChatRecovery.kt`](app/src/main/java/com/labsage/app/ui/chat/ChatRecovery.kt) · [实测报告](docs/SSE_CADENCE_GRID_REPORT.md)
 
@@ -58,7 +58,7 @@ Kotlin + Jetpack Compose，**MVVM + Repository** 分离 UI、网络与数据层�
 
 - **级联主体**：Agent SSE → EventSource（`callbackFlow`）→ 有界缓冲 512 → 内存累积 → 分两路按各自节奏消费（UI 50 ms / Room 500 ms）。
 - **底座**：Room 是唯一数据源，承载重启恢复与断点续传。
-- **数据**：Room 写入次数 −89.6% 为模拟器 30 轮实测，基线是旧「每 5 个 chunk 写一次」策略，详见[报告](docs/SSE_CADENCE_GRID_REPORT.md)。
+- **数据**：写入降幅来自真实后端 trace 录制回放（`scripts/record_sse_trace.py` 录制 → 模拟器 30 轮 A/B），基线是旧「每 5 chunk 一写」策略；高密度合成负载下为 −90.05%，详见[报告](docs/SSE_CADENCE_GRID_REPORT.md)。
 
 ---
 
@@ -77,9 +77,12 @@ Kotlin + Jetpack Compose，**MVVM + Repository** 分离 UI、网络与数据层�
 
 | 指标 | 结果 | 依据 |
 |---|---|---|
-| SSE 期间 Room 持久化次数 | 202 → 21（**−89.6%**） | [参数网格报告](docs/SSE_CADENCE_GRID_REPORT.md) |
+| SSE 期间 Room 持久化次数 | 真实 trace 回放 **−81.8%（直答）/ −97.1%（工具查询簇发）**；高密度合成负载 202 → 21（−90.05%） | [参数网格与真实 trace 报告](docs/SSE_CADENCE_GRID_REPORT.md) |
 | 文件上传堆内存增量中位数 | **−98.7% ~ −99.1%**（180 样本 A/B，SHA-256 校验输出一致） | [上传基准报告](docs/UPLOAD_BENCHMARK.md) |
-| 测试 | 64 单元测试 + 42 仪器测试，CI 每次推送运行 | [ci.yml](.github/workflows/ci.yml) |
+| 包体积（R8 + resource shrink） | **20.83 → 2.58 MB（−87.6%）** | [优化记录](docs/PERF_BASELINE.md) |
+| 冷启动（模拟器 ×10 中位） | 408 ms → AOT 上界 **304 ms（−25.5%）**，BP 待生成 | [优化记录](docs/PERF_BASELINE.md) |
+| 崩溃闭环 | 捕获→落盘→下次启动上报→后端聚合，端到端实测 | [优化记录](docs/PERF_BASELINE.md) |
+| 测试 | 70 单元测试 + 41 仪器测试（含真实 trace 回放基准），CI 每次推送运行 | [ci.yml](.github/workflows/ci.yml) |
 
 ## 快速开始
 
@@ -95,33 +98,16 @@ Kotlin + Jetpack Compose，**MVVM + Repository** 分离 UI、网络与数据层�
 ## 附录
 
 <details>
-<summary><b>更多文档（架构 / 排错 / 契约 / 学习笔记）</b></summary>
+<summary><b>更多文档（架构 / 实测 / 排错 / 契约）</b></summary>
 
 | 文档 | 内容 |
 |---|---|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 整体架构、SSE 协议、Room 表设计、关键决策 |
-| [SSE_CADENCE_GRID_REPORT.md](docs/SSE_CADENCE_GRID_REPORT.md) | 50/500 ms 参数网格实测（3×3 组、30 轮） |
+| [CADENCE_DECISION_SPACE.md](docs/CADENCE_DECISION_SPACE.md) | 50/500 ms 的四维度决策证据（视觉连续性 / 调度 / 写入 / 崩溃丢失） |
+| [SSE_CADENCE_GRID_REPORT.md](docs/SSE_CADENCE_GRID_REPORT.md) | 50/500 ms 参数网格实测 + 真实 trace 复现（−82%~−97%） |
 | [UPLOAD_BENCHMARK.md](docs/UPLOAD_BENCHMARK.md) | 流式上传 A/B 实验（180 样本） |
 | [BUGFIX_LOG.md](docs/BUGFIX_LOG.md) | 真实 Bug 复盘（背压丢事件、REPLACE 触发级联删除等） |
-| [files-api-contract.md](docs/files-api-contract.md) · [API_AND_KEY_POINTS.md](docs/API_AND_KEY_POINTS.md) | 接口契约与要点 |
-
-</details>
-
-<details>
-<summary><b>用真机录屏替换演示动画（可选）</b></summary>
-
-```bash
-# 方案 A：scrcpy 录制
-scrcpy --record demo.mp4
-# 方案 B：adb 录屏（≤3 分钟）
-adb shell screenrecord /sdcard/demo.mp4 && adb pull /sdcard/demo.mp4
-
-# 转 GIF（macOS，brew install ffmpeg gifski）
-mkdir frames && ffmpeg -i demo.mp4 -vf "fps=12,scale=480:-1" frames/f%03d.png
-gifski --fps 12 -o docs/assets/demo.gif frames/*.png
-```
-
-录制后把 README 顶部的 `docs/assets/demo.svg` 替换为 `demo.gif` 即可。
+| [CITATION_DESIGN.md](docs/CITATION_DESIGN.md) | 引用角标：方案选型、wire 契约、双端实现 |
 
 </details>
 
