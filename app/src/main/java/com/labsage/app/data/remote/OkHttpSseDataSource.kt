@@ -1,6 +1,7 @@
 package com.labsage.app.data.remote
 
 import com.google.gson.Gson
+import com.labsage.app.domain.model.toReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -170,7 +171,12 @@ class OkHttpSseDataSource(
                         assistantMessageId = payload.assistantMessageId,
                         status = payload.status,
                         updatedAt = payload.updatedAt,
-                        syncVersion = payload.syncVersion
+                        syncVersion = payload.syncVersion,
+                        // Nullable on the wire: an older backend sends no references.
+                        references = payload.references
+                            ?.map { it.toReference() }
+                            ?.filter { it.ref.isNotBlank() }
+                            .orEmpty()
                     )
                 } catch (_: Exception) {
                     SseEvent.Error("Malformed stream completion metadata", retryable = true)

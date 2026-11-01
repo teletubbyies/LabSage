@@ -1,6 +1,7 @@
 package com.labsage.app.ui.chat.components
 
 import android.annotation.SuppressLint
+import android.text.method.LinkMovementMethod
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -14,12 +15,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.labsage.app.R
+import com.labsage.app.domain.model.CITATION_URI_PREFIX
+import com.labsage.app.domain.model.MessageReference
+import com.labsage.app.domain.model.inlineCitationLinks
 import com.labsage.app.ui.theme.LocalExtendedColors
 import dev.jeziellago.compose.markdowntext.MarkdownText
 
@@ -30,10 +35,15 @@ fun MessageBubble(
     content: String,
     modifier: Modifier = Modifier,
     isStreaming: Boolean = false,
-    traceLines: List<String> = emptyList()
+    traceLines: List<String> = emptyList(),
+    citations: List<MessageReference> = emptyList(),
+    // Keep the caller's lambda stable (remember-ed) so historical bubbles stay
+    // skippable — same rationale as the combinedClickable note in ChatScreen.
+    onCitationClick: ((MessageReference) -> Unit)? = null
 ) {
     val isUser = role == "user"
     val ext = LocalExtendedColors.current
+    val scheme = MaterialTheme.colorScheme
 
     BoxWithConstraints(
         modifier = modifier
@@ -66,7 +76,39 @@ fun MessageBubble(
                 ) {
                     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                         if (!isUser && !isStreaming && content.isNotBlank()) {
-                            MarkdownText(markdown = content)
+                            // Inline citations: rewrite the model's [N] markers
+                            // into labsage:// links and intercept their clicks;
+                            // real web links still open externally.
+                            if (citations.isNotEmpty() && onCitationClick != null) {
+                                val uriHandler = LocalUriHandler.current
+                                MarkdownText(
+                                    markdown = inlineCitationLinks(content, citations),
+                                    linkColor = scheme.primary,
+                                    // Keep the inline marker a quiet accent: color
+                                    // only, no underline.
+                                    enableUnderlineForLink = false,
+                                    // Markwon never sets a MovementMethod itself, so
+                                    // links render styled but silently ignore taps
+                                    // until one is attached (verified against
+                                    // compose-markdown 0.5.7 bytecode: it only
+                                    // CLEARS the method when asked to).
+                                    beforeSetMarkdown = { textView, _ ->
+                                        textView.movementMethod =
+                                            LinkMovementMethod.getInstance()
+                                    },
+                                    onLinkClicked = { url ->
+                                        val ref = url.removePrefix(CITATION_URI_PREFIX)
+                                        val citation = citations.firstOrNull { it.ref == ref }
+                                        if (url.startsWith(CITATION_URI_PREFIX) && citation != null) {
+                                            onCitationClick(citation)
+                                        } else {
+                                            runCatching { uriHandler.openUri(url) }
+                                        }
+                                    }
+                                )
+                            } else {
+                                MarkdownText(markdown = content)
+                            }
                         } else if (!isUser && isStreaming && content.isEmpty()) {
                             Text(
                                 stringResource(R.string.thinking),
@@ -86,6 +128,14 @@ fun MessageBubble(
                             )
                         }
                     }
+                }
+
+                // Citation chips also stay as a large tap target — the inline
+                // [N] link's hit area is only ~3 characters wide and easy to
+                // miss with a finger.
+                if (!isUser && !isStreaming && citations.isNotEmpty() && onCitationClick != null) {
+                    Spacer(Modifier.height(4.dp))
+                    CitationChipsRow(citations, onCitationClick)
                 }
             }
         }
@@ -133,6 +183,54 @@ private fun InlineTraceChip(traceLines: List<String>) {
                 fontSize = 11.sp, color = scheme.primary, fontWeight = FontWeight.Medium
             )
         )
+    }
+}
+
+// ============================================================
+// Citation chips — under the bubble; large tap targets for the
+// same references that are also clickable inline
+// ============================================================
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CitationChipsRow(
+    citations: List<MessageReference>,
+    onCitationClick: (MessageReference) -> Unit
+) {
+    val ext = LocalExtendedColors.current
+    val scheme = MaterialTheme.colorScheme
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        citations.forEach { citation ->
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = ext.inlineTraceBg,
+                border = androidx.compose.foundation.BorderStroke(0.5.dp, scheme.primary.copy(alpha = 0.35f)),
+                onClick = { onCitationClick(citation) }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Link,
+                        contentDescription = null,
+                        modifier = Modifier.size(12.dp),
+                        tint = scheme.primary
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        text = citation.ref,
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Medium,
+                            color = scheme.primary
+                        )
+                    )
+                }
+            }
+        }
     }
 }
 

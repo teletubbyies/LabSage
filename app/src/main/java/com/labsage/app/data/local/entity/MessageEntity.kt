@@ -77,5 +77,14 @@ data class MessageEntity(
 
     /** Local tombstone mirrored from the server during sync. */
     @ColumnInfo(name = "is_deleted")
-    val isDeleted: Boolean = false
+    val isDeleted: Boolean = false,
+
+    /**
+     * Chunk-level citations for assistant messages, encoded by
+     * ReferencesCodec (null = none). Stored inline as JSON rather than in a
+     * separate table: the list is small (<10), always read with its message,
+     * and never queried by ref — see docs/CITATION_DESIGN.md (option B1).
+     */
+    @ColumnInfo(name = "references_json")
+    val referencesJson: String? = null
 )

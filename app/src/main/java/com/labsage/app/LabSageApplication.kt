@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.room.Room
 import com.google.gson.Gson
+import com.labsage.app.crash.CrashReporter
 import com.labsage.app.data.auth.AccessTokenAuthenticator
 import com.labsage.app.data.auth.AccessTokenInterceptor
 import com.labsage.app.data.auth.AuthApi
@@ -26,6 +27,7 @@ import com.labsage.app.ui.files.FileManagementViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -57,6 +59,18 @@ class LabSageApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         responseNotificationManager.createChannel() // 向系统注册通知channel
+        // Crash capture: persist first, delegate to the system handler after;
+        // the backlog uploads on the next launch from appScope.
+        CrashReporter.install(
+            filesDir = filesDir,
+            appVersion = BuildConfig.VERSION_NAME,
+            previous = Thread.getDefaultUncaughtExceptionHandler()
+        )
+        appScope.launch {
+            runCatching { repository.uploadPendingCrashReports() }
+                .onFailure { android.util.Log.e("CrashReporter", "upload failed", it) }
+                .onSuccess { android.util.Log.i("CrashReporter", "uploaded $it crash reports") }
+        }
     }
 
     // ============================================================
@@ -253,6 +267,7 @@ class LabSageApplication : Application() {
             .addMigrations(AppDatabase.MIGRATION_4_5)
             .addMigrations(AppDatabase.MIGRATION_5_6)
             .addMigrations(AppDatabase.MIGRATION_6_7)
+            .addMigrations(AppDatabase.MIGRATION_7_8)
             .build()
     }
 

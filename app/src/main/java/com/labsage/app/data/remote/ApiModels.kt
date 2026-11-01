@@ -1,6 +1,7 @@
 package com.labsage.app.data.remote
 
 import com.google.gson.annotations.SerializedName
+import com.labsage.app.domain.model.MessageReferencePayload
 
 // ============================================================
 // Request DTOs
@@ -189,7 +190,13 @@ data class SseDonePayload(
     @SerializedName("assistantMessageId") val assistantMessageId: String,
     @SerializedName("status") val status: String,
     @SerializedName("updatedAt") val updatedAt: Long,
-    @SerializedName("syncVersion") val syncVersion: Long
+    @SerializedName("syncVersion") val syncVersion: Long,
+    /**
+     * Chunk-level citations for the answer (evidence registry snapshot).
+     * Nullable so the client keeps working against a backend that does not
+     * send references yet.
+     */
+    @SerializedName("references") val references: List<MessageReferencePayload>? = null
 )
 
 data class ConversationListData(
@@ -235,7 +242,9 @@ data class MessageDto(
     @SerializedName("clientCreatedAt") val clientCreatedAt: Long,
     @SerializedName("syncVersion") val syncVersion: Long,
     @SerializedName("createdAt") val createdAt: Long,
-    @SerializedName("updatedAt") val updatedAt: Long
+    @SerializedName("updatedAt") val updatedAt: Long,
+    /** Citations carried by history sync; nullable for older backends. */
+    @SerializedName("references") val references: List<MessageReferencePayload>? = null
 )
 
 data class LegacyImportRequest(
@@ -297,4 +306,23 @@ data class UpdateSessionContextRequest(
 data class UpdateSessionContextResponse(
     @SerializedName("ok")
     val ok: Boolean
+)
+
+// ============================================================
+// Crash reporting — POST /api/crash_reports (anonymous-tolerant)
+// ============================================================
+
+data class CrashReportRequest(
+    @SerializedName("occurredAt") val occurredAt: String,
+    @SerializedName("appVersion") val appVersion: String,
+    @SerializedName("deviceModel") val deviceModel: String,
+    @SerializedName("androidVersion") val androidVersion: String,
+    @SerializedName("threadName") val threadName: String,
+    @SerializedName("exceptionClass") val exceptionClass: String,
+    @SerializedName("message") val message: String? = null,
+    @SerializedName("stackTrace") val stackTrace: String
+)
+
+data class CrashReportData(
+    @SerializedName("ok") val ok: Boolean
 )

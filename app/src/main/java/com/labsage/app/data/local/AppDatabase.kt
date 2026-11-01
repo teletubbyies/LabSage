@@ -27,7 +27,7 @@ import java.util.UUID
         MessageEntity::class,
         HistoryCursorEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -214,6 +214,16 @@ abstract class AppDatabase : RoomDatabase() {
                     "CREATE INDEX IF NOT EXISTS index_messages_conversation_id_timestamp " +
                         "ON messages(conversation_id, timestamp)"
                 )
+            }
+        }
+
+        /**
+         * v7 → v8: store chunk-level citations inline on assistant messages.
+         * Nullable column — existing rows simply have no references.
+         */
+        val MIGRATION_7_8: Migration = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN references_json TEXT")
             }
         }
 

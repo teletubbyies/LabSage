@@ -1,5 +1,7 @@
 package com.labsage.app.data.remote
 
+import com.labsage.app.domain.model.MessageReference
+
 /**
  * Parsed SSE event from the backend stream.
  *
@@ -30,7 +32,9 @@ sealed class SseEvent {
         val assistantMessageId: String,
         val status: String,
         val updatedAt: Long,
-        val syncVersion: Long
+        val syncVersion: Long,
+        /** Chunk-level citations of the answer; empty when the backend sends none. */
+        val references: List<MessageReference> = emptyList()
     ) : SseEvent()
 
     /** Stream error. data = JSON {message, partial, retryable} */

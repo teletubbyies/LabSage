@@ -1,5 +1,6 @@
 package com.labsage.app.data.local.dao
 
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
@@ -45,6 +46,18 @@ interface MessageDao {
 
     @Upsert
     suspend fun upsertAll(messages: List<MessageEntity>)
+
+    /** Projection used to preserve local citations across syncs (see mergeMessages). */
+    data class ReferenceJsonRow(
+        val id: String,
+        @ColumnInfo(name = "references_json") val referencesJson: String?
+    )
+
+    @Query(
+        "SELECT id, references_json FROM messages WHERE id IN (:ids) " +
+            "AND conversation_id IN (SELECT id FROM conversations WHERE owner_user_id = :userId)"
+    )
+    suspend fun getReferencesJsonByIds(userId: String, ids: List<String>): List<ReferenceJsonRow>
 
     @Query(
         "SELECT messages.id FROM messages INNER JOIN conversations " +
@@ -95,7 +108,8 @@ interface MessageDao {
                 content = message.content.ifEmpty { existing.content },
                 route = message.route ?: existing.route,
                 originalQuestion = message.originalQuestion ?: existing.originalQuestion,
-                errorMessage = message.errorMessage ?: existing.errorMessage
+                errorMessage = message.errorMessage ?: existing.errorMessage,
+                referencesJson = message.referencesJson ?: existing.referencesJson
             )
             upsertAll(listOf(merged))
             return merged.id
@@ -191,12 +205,19 @@ interface MessageDao {
 
     /** Mark a message as no longer partial (stream completed successfully) */
     @Query(
-        "UPDATE messages SET is_partial = 0, status = 'completed', route = :route, content = :content " +
+        "UPDATE messages SET is_partial = 0, status = 'completed', route = :route, content = :content, " +
+            "references_json = :referencesJson " +
             "WHERE id = :messageId AND conversation_id IN " +
             "(SELECT id FROM conversations WHERE owner_user_id = :userId) " +
             "AND NOT (status = 'completed' AND sync_version > 0)"
     )
-    suspend fun finalizeMessage(userId: String, messageId: String, content: String, route: String?)
+    suspend fun finalizeMessage(
+        userId: String,
+        messageId: String,
+        content: String,
+        route: String?,
+        referencesJson: String? = null
+    )
 
     @Query(
         "UPDATE messages SET id = :serverId, status = :status, " +

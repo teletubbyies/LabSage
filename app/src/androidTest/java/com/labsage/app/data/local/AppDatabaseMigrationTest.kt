@@ -75,7 +75,8 @@ class AppDatabaseMigrationTest {
                 AppDatabase.MIGRATION_3_4,
                 AppDatabase.MIGRATION_4_5,
                 AppDatabase.MIGRATION_5_6,
-                AppDatabase.MIGRATION_6_7
+                AppDatabase.MIGRATION_6_7,
+                AppDatabase.MIGRATION_7_8
             )
             .build()
         val db = room.openHelper.writableDatabase // Opens, migrates, and validates latest schema.
@@ -83,6 +84,11 @@ class AppDatabaseMigrationTest {
             val columns = mutableListOf<String>()
             while (cursor.moveToNext()) columns += cursor.getString(2)
             assertEquals(listOf("conversation_id", "timestamp"), columns)
+        }
+        // v7 → v8: citations column exists on the migrated messages table.
+        db.query("SELECT references_json FROM messages LIMIT 1").use { cursor ->
+            // Empty table is fine — the query itself fails if the column is missing.
+            assertTrue(cursor.moveToFirst() || cursor.count == 0)
         }
 
         val conversationId = db.query(

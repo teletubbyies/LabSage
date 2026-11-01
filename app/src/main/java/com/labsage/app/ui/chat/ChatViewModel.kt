@@ -11,6 +11,8 @@ import com.labsage.app.data.repository.ChatRepository
 import com.labsage.app.data.sync.HistorySyncState
 import com.labsage.app.data.repository.SettingsRepository
 import com.labsage.app.domain.model.StreamState
+import com.labsage.app.domain.model.MessageReference
+import com.labsage.app.domain.model.ReferencesCodec
 import com.labsage.app.domain.model.ToolCallStatus
 import com.labsage.app.domain.model.ToolCallUi
 import com.labsage.app.notification.ResponseNotificationManager
@@ -132,19 +134,6 @@ class ChatViewModel(
     private var currentRoute: String? = null
     private var lastQuestion: String = ""
     private val sseUpdateCadence = SseUpdateCadence()
-    private val typewriter = TypewriterCadence()
-    private var renderJob: Job? = null
-    private var drainJob: Job? = null
-
-    /**
-     * True while the terminal accelerated drain (post-Done) is still popping the
-     * remaining backlog. Guards the streamingJob finally blocks: the terminal
-     * state transition is deferred to the drain's completion, so `_streamState
-     * is Streaming` alone would misfire "EOF without Done" failure persistence,
-     * and an early `startMessageObservation()` would let the Room terminal row
-     * overwrite the still-draining prefix.
-     */
-    private var terminalDrainPending = false
     /** Per-tool-call start time (key → nanoTime) for duration measurement. */
     private val toolCallStartNanos = mutableMapOf<String, Long>()
 
@@ -279,11 +268,6 @@ class ChatViewModel(
             currentRoute = null
             streamingMessageId = null
             sseUpdateCadence.reset(android.os.SystemClock.elapsedRealtime())
-            typewriter.reset()
-            // Unreachable with a live drain (entry guard blocks sends while
-            // Streaming) — defensive: a stray drain must never outlive its stream.
-            drainJob?.cancel()
-            terminalDrainPending = false
 
             // Open SSE stream
             // data from network io, including chat data stored in db, and tool chain usage stored in memory.
@@ -301,16 +285,14 @@ class ChatViewModel(
                         .catch { e -> handleStreamException(e) }
                         .collect { event -> handleSseEvent(event) }
                 } finally {
-                    stopTypewriterRendering()
                     try {
                         // A clean EOF without Done is still a failed terminal path;
                         // persist the latest in-memory answer before reconciling.
-                        // terminalDrainPending: Done already handled this stream and
-                        // deferred its terminal sequence — do not double-terminalize.
+                        // The state check skips streams already terminalized by
+                        // Done (whose handling completed the terminal sequence).
                         if (
                             kotlinx.coroutines.currentCoroutineContext()[Job]?.isActive == true &&
-                            _streamState.value is StreamState.Streaming &&
-                            !terminalDrainPending
+                            _streamState.value is StreamState.Streaming
                         ) {
                             persistTerminalFailure(
                                 message = "Connection closed before completion",
@@ -319,10 +301,8 @@ class ChatViewModel(
                         }
                     } finally {
                         // Covers cancellation or a failure while processing/persisting
-                        // the terminal event. During a pending drain the observation
-                        // restart belongs to the drain's completion — restarting now
-                        // would let the Room terminal row overwrite the draining prefix.
-                        if (!terminalDrainPending) startMessageObservation()
+                        // the terminal event.
+                        startMessageObservation()
                     }
                 }
             }
@@ -344,12 +324,6 @@ class ChatViewModel(
             try {
                 _streamState.value = StreamState.Streaming
                 sseUpdateCadence.reset(android.os.SystemClock.elapsedRealtime())
-                // The prior partial is already displayed in full and the backend
-                // only sends deltas on top of it — pin the cursor so continue
-                // appends instead of re-typing (update_sse.md constraint 4).
-                typewriter.reset(accumulatedAnswer.length)
-                drainJob?.cancel()
-                terminalDrainPending = false
                 streamingMessageId?.let { repository.markAssistantStreaming(it) }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 startMessageObservation()
@@ -373,12 +347,10 @@ class ChatViewModel(
                         .catch { e -> handleStreamException(e) }
                         .collect { event -> handleSseEvent(event) }
                 } finally {
-                    stopTypewriterRendering()
                     try {
                         if (
                             kotlinx.coroutines.currentCoroutineContext()[Job]?.isActive == true &&
-                            _streamState.value is StreamState.Streaming &&
-                            !terminalDrainPending
+                            _streamState.value is StreamState.Streaming
                         ) {
                             persistTerminalFailure(
                                 message = "Connection closed before completion",
@@ -386,7 +358,7 @@ class ChatViewModel(
                             )
                         }
                     } finally {
-                        if (!terminalDrainPending) startMessageObservation()
+                        startMessageObservation()
                     }
                 }
             }
@@ -403,10 +375,6 @@ class ChatViewModel(
         }
         streamingMessageId = null
         accumulatedAnswer.clear()
-        stopTypewriterRendering()
-        drainJob?.cancel()
-        terminalDrainPending = false
-        typewriter.reset()
         _streamState.value = StreamState.Idle
 
         // Resend
@@ -461,19 +429,17 @@ class ChatViewModel(
             }
 
             is SseEvent.Message -> {
-                // Post-Done text (misbehaving server): Done already terminalized the
-                // stream and the drain is publishing toward finalAnswer — appending
-                // mid-drain would let prefixes overshoot and then regress. Ignore.
-                if (terminalDrainPending) return
+                // Late chunks after a terminal event (misbehaving server) must
+                // not append to or regress a finalized answer.
+                if (_streamState.value !is StreamState.Streaming) return
                 accumulatedAnswer.append(event.text)
-                val nowMs = android.os.SystemClock.elapsedRealtime()
-                // SseUpdateCadence now drives only the Room checkpoint half; the
-                // publishUi half is superseded by the typewriter render loop (the
-                // field stays live for tests/benchmarks as the control arm —
-                // SSE_TYPEWRITER_FEASIBILITY.md §8).
+                val nowMs = SystemClock.elapsedRealtime()
+                // Dual-throttle cadence: one decision drives both channels —
+                // UI snapshots at 50 ms, Room checkpoints at 500 ms.
                 val updateDecision = sseUpdateCadence.onChunk(nowMs)
                 val contentSnapshot = if (
                     streamingMessageId == null ||
+                    updateDecision.publishUi ||
                     updateDecision.checkpoint
                 ) {
                     accumulatedAnswer.toString()
@@ -483,6 +449,7 @@ class ChatViewModel(
                 var insertedFirstCheckpoint = false
 
                 if (streamingMessageId == null) {
+                    // 第一个chunk的措施
                     streamingMessageId = repository.saveAssistantMessage(
                         conversationId = conversationId,
                         content = checkNotNull(contentSnapshot),
@@ -492,14 +459,14 @@ class ChatViewModel(
                     )
                     sseUpdateCadence.markCheckpoint(nowMs)
                     insertedFirstCheckpoint = true
-                    // The row is now visible — start the typewriter loop. It is
-                    // tick-then-delay, so this first chunk renders on arrival.
-                    startTypewriterRendering()
+                }
+
+                if (updateDecision.publishUi || insertedFirstCheckpoint) {
+                    publishStreamingSnapshot(checkNotNull(contentSnapshot))
                 }
 
                 if (!insertedFirstCheckpoint && updateDecision.checkpoint) {
-                    // Persist the FULL text at a time-based cadence independent of
-                    // backend chunk size/rate (UI shows only the rendered prefix).
+                    // Persist at a time-based cadence independent of backend chunk size/rate.
                     // The terminal path always flushes the final content.
                     repository.updateAssistantMessage(
                         checkNotNull(streamingMessageId),
@@ -536,13 +503,10 @@ class ChatViewModel(
             }
 
             is SseEvent.Done -> {
-                // A protocol-violating second Done during the drain would launch a
-                // second drainJob racing the first. The first Done is authoritative.
-                if (terminalDrainPending) return
-                // Cancel the render loop BEFORE anything else: after the first
-                // suspend point below, an uncancelled tick could publish an old
-                // prefix over the terminal full text (update_sse.md constraint 2).
-                stopTypewriterRendering()
+                // A protocol-violating second Done must not re-terminalize the
+                // stream: the first Done already moved _streamState out of
+                // Streaming, so this guard makes Done handling idempotent.
+                if (_streamState.value !is StreamState.Streaming) return
                 if (
                     event.conversationId != conversationId ||
                     event.userMessageId != currentUserMessageId
@@ -554,13 +518,18 @@ class ChatViewModel(
                     return
                 }
                 val finalAnswer = accumulatedAnswer.toString()
-                // Room terminalization FIRST — the drain below is UI-only, and with
-                // the full text already persisted a mid-drain process death still
-                // recovers to the complete answer (crash semantics unchanged).
+                // Room terminalization FIRST: with the full text already
+                // persisted, a process death right after still recovers to the
+                // complete answer.
                 val localMessageId = streamingMessageId
                 val terminalMessageId = if (localMessageId != null) {
                     if (event.status == "completed") {
-                        repository.finalizeAssistantMessage(localMessageId, finalAnswer, currentRoute)
+                        repository.finalizeAssistantMessage(
+                            localMessageId,
+                            finalAnswer,
+                            currentRoute,
+                            referencesJson = ReferencesCodec.encode(event.references)
+                        )
                     } else {
                         repository.updateAssistantMessage(
                             localMessageId,
@@ -579,37 +548,8 @@ class ChatViewModel(
                 }
                 streamingMessageId = terminalMessageId
 
-                if (typewriter.renderedLength >= finalAnswer.length) {
-                    // Nothing left to animate — finish synchronously as before.
-                    publishStreamingSnapshot(finalAnswer)
-                    completeTerminalUi(finalAnswer, event)
-                    return
-                }
-                // Accelerated terminal drain: strictly per-segment popping (never a
-                // dump). The remaining backlog is spread uniformly across the drain
-                // window at a faster tick rate; the state transition, Room-flow
-                // restart and (via StreamState) the send button all wait until the
-                // drain completes. publishStreamingSnapshot keeps publishing the
-                // growing prefix; observation stays paused, so nothing overwrites it.
-                terminalDrainPending = true
-                drainJob = viewModelScope.launch {
-                    var ticksLeft = (
-                        (TypewriterCadence.TERMINAL_DRAIN_MS + TypewriterCadence.DRAIN_TICK_MS - 1) /
-                            TypewriterCadence.DRAIN_TICK_MS
-                        ).toInt()
-                    while (isActive && ticksLeft > 0) {
-                        typewriter.onDrainTick(accumulatedAnswer, ticksLeft)?.let { rendered ->
-                            publishStreamingSnapshot(accumulatedAnswer.substring(0, rendered))
-                        }
-                        if (typewriter.renderedLength >= finalAnswer.length) break
-                        ticksLeft--
-                        delay(TypewriterCadence.DRAIN_TICK_MS)
-                    }
-                    // Exact terminal content — identical to what Room holds.
-                    publishStreamingSnapshot(finalAnswer)
-                    terminalDrainPending = false
-                    completeTerminalUi(finalAnswer, event)
-                }
+                publishStreamingSnapshot(finalAnswer)
+                completeTerminalUi(finalAnswer, event)
             }
 
             is SseEvent.Error -> {
@@ -681,14 +621,10 @@ class ChatViewModel(
      * malformed or mismatched done metadata, SSE error events, and transport loss.
      */
     private suspend fun persistTerminalFailure(message: String, retryable: Boolean) {
-        // Done already terminalized this stream (Room holds the full answer) and
-        // the accelerated drain will complete the terminal UI itself. A trailing
-        // transport error / SSE error event inside the drain window must not
-        // downgrade the row to partial nor publish over the draining prefix.
-        if (terminalDrainPending) return
-        // First statement, before any suspend point — same terminal-race guard
-        // as the Done branch (no tick may outlive the terminal full publish).
-        stopTypewriterRendering()
+        // First statement, before any suspend point — a Done-terminated stream
+        // has already left Streaming, and the guard in the Done branch keeps a
+        // trailing transport error from downgrading the finalized row.
+        if (_streamState.value !is StreamState.Streaming) return
         val failure = ChatTerminalFailure.from(accumulatedAnswer.toString())
         publishStreamingSnapshot(failure.content)
         val terminalMessageId = streamingMessageId ?: repository.saveAssistantMessage(
@@ -753,9 +689,6 @@ class ChatViewModel(
         currentUserMessageId = recovered.user.id
         currentClientCreatedAt = recovered.user.clientCreatedAt
         sseUpdateCadence.reset(android.os.SystemClock.elapsedRealtime())
-        // Recovered full text is displayed immediately via Room observation;
-        // pin the cursor so a later continue appends on top of it.
-        typewriter.reset(accumulatedAnswer.length)
         val recoveredFromProcessDeath = last.status == "streaming"
         if (recoveredFromProcessDeath) {
             viewModelScope.launch {
@@ -797,38 +730,6 @@ class ChatViewModel(
         } else {
             current + userMessage
         }
-    }
-
-    /**
-     * Drives typewriter rendering while a streaming assistant row is live: every
-     * TICK_MS the cursor advances by ceil(backlog / horizon) (see [TypewriterCadence])
-     * and the growing prefix is published. Tick-then-delay — the first tick runs
-     * before the first sleep, so the first Message chunk becomes visible on arrival.
-     *
-     * Single-thread proof: this loop and the SSE collector both run on
-     * viewModelScope (Dispatchers.Main.immediate) and the loop body between
-     * suspension points is synchronous, so reads of [accumulatedAnswer] can
-     * never interleave with the collector's append. After [stopTypewriterRendering]
-     * the loop cannot publish again: at cancel() time it is either undispatched
-     * (never runs), suspended in delay() (resumes with CancellationException),
-     * or mid-body (impossible — bodies never overlap on one thread). Hence an
-     * old prefix can never overwrite a terminal full publish.
-     */
-    private fun startTypewriterRendering() {
-        if (renderJob?.isActive == true) return // idempotent: chunks re-invoke
-        renderJob = viewModelScope.launch {
-            while (isActive) {
-                typewriter.onTick(accumulatedAnswer)?.let { rendered ->
-                    publishStreamingSnapshot(accumulatedAnswer.substring(0, rendered))
-                }
-                delay(TypewriterCadence.TICK_MS)
-            }
-        }
-    }
-
-    private fun stopTypewriterRendering() {
-        renderJob?.cancel()
-        renderJob = null
     }
 
     /**
@@ -1052,7 +953,8 @@ class ChatViewModel(
         route = route,
         originalQuestion = originalQuestion,
         errorMessage = errorMessage,
-        status = status
+        status = status,
+        citations = ReferencesCodec.decode(referencesJson)
     )
 }
 
@@ -1080,7 +982,9 @@ data class MessageUiState(
     val route: String? = null,
     val originalQuestion: String? = null,
     val errorMessage: String? = null,
-    val status: String = "completed"
+    val status: String = "completed",
+    /** Chunk-level citations; non-empty only after the terminal Done event. */
+    val citations: List<MessageReference> = emptyList()
 )
 
 sealed class UploadState {

@@ -12,6 +12,10 @@ import retrofit2.http.*
  */
 interface LabSageApi {
 
+    /** Crash report upload — anonymous-tolerant so pre-login crashes report too. */
+    @POST("api/crash_reports")
+    suspend fun reportCrash(@Body request: CrashReportRequest): ApiResponse<CrashReportData>
+
     /** Non-streaming (quick mode) chat — POST /api/chat */
     @POST("api/chat")
     suspend fun chat(@Body request: ChatRequest): ApiResponse<ChatData>

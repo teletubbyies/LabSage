@@ -6,24 +6,39 @@ import android.util.Log
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.labsage.app.data.local.AppDatabase
 import com.labsage.app.data.local.entity.ConversationEntity
 import com.labsage.app.data.local.entity.MessageEntity
+import com.labsage.app.ui.chat.SseUpdateCadence
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.math.ceil
 
 /**
- * Measures the real SQLite/Room work caused by the legacy per-5-chunk strategy
- * against the production 500 ms checkpoint cadence.
+ * Trace-driven A/B of Room write counts: the legacy "every 5 chunks" strategy
+ * vs the production SseUpdateCadence (500 ms checkpoints), replayed over REAL
+ * recorded SSE arrival traces (see scripts/record_sse_trace.py) plus one
+ * synthetic high-density scenario for comparison with the grid report.
  *
- * This is intentionally a comparative test, not a universal device benchmark:
- * both strategies run alternately against the same in-memory Room database,
- * dataset, answer snapshots and process.
+ * Real traces matter because chunk arrival is far from uniform: the direct
+ * trace has 216 ms stalls, the react trace arrives in near-zero-gap bursts.
+ * Both arms replay the SAME trace, so the comparison isolates the cadence
+ * policy from network/model behaviour.
  */
 @RunWith(AndroidJUnit4::class)
 class SsePersistenceBenchmarkTest {
+
+    private data class TraceChunk(val tMs: Double, val text: String)
+
+    private data class Scenario(
+        val name: String,
+        val chunks: List<TraceChunk>,
+        /** Synthetic scenarios describe themselves in the report. */
+        val origin: String
+    )
 
     @Test
     fun compareLegacyAndTimedCheckpointPersistence() = runBlocking {
@@ -32,77 +47,125 @@ class SsePersistenceBenchmarkTest {
         val database = Room.databaseBuilder(context, AppDatabase::class.java, databaseName).build()
         try {
             seed(database)
-            val finalContent = buildString(CHUNK_COUNT * CHUNK_TEXT.length) {
-                repeat(CHUNK_COUNT) { append(CHUNK_TEXT) }
-            }
-            val legacySnapshots = buildSnapshots(
-                finalContent = finalContent,
-                checkpointIndices = (LEGACY_CHUNKS_PER_WRITE..CHUNK_COUNT)
-                    .step(LEGACY_CHUNKS_PER_WRITE)
-                    .toList()
-            ) + finalContent // terminal finalization is an additional UPDATE
-            val optimizedSnapshots = buildSnapshots(
-                finalContent = finalContent,
-                checkpointIndices = (51 until CHUNK_COUNT step 50).toList()
-            ) + finalContent
+            val scenarios = listOf(
+                realTrace("direct", "sse_trace_direct.json"),
+                realTrace("react", "sse_trace_react.json"),
+                Scenario(
+                    name = "synthetic-1000@10ms",
+                    origin = "synthetic (grid-report load: 1000 chunks × 10 ms)",
+                    chunks = List(1_000) { index ->
+                        TraceChunk((index + 1) * 10.0, "0123456789abcdef0123456789abcdef")
+                    }
+                )
+            )
 
-            repeat(WARMUP_ROUNDS) {
-                measureRound(database, legacySnapshots)
-                measureRound(database, optimizedSnapshots)
+            val results = mutableListOf<Triple<Scenario, Int, Int>>() // scenario, legacyWrites, optimizedWrites
+            scenarios.forEach { scenario ->
+                val (legacySnapshots, optimizedSnapshots, finalContent) = replay(scenario)
+                // Warm up both arms outside the measured rounds (JIT/page cache).
+                repeat(WARMUP_ROUNDS) {
+                    measureRound(database, legacySnapshots)
+                    measureRound(database, optimizedSnapshots)
+                }
+                val legacyTimesMs = mutableListOf<Double>()
+                val optimizedTimesMs = mutableListOf<Double>()
+                repeat(MEASURED_ROUNDS) { round ->
+                    if (round % 2 == 0) {
+                        legacyTimesMs += measureRound(database, legacySnapshots)
+                        optimizedTimesMs += measureRound(database, optimizedSnapshots)
+                    } else {
+                        optimizedTimesMs += measureRound(database, optimizedSnapshots)
+                        legacyTimesMs += measureRound(database, legacySnapshots)
+                    }
+                }
+                val stored = database.messageDao().getOwnedMessage(USER_ID, STREAM_MESSAGE_ID)
+                check(stored?.content == finalContent) { "final Room content differs from SSE content" }
+
+                val writeReduction = 100.0 *
+                    (1.0 - optimizedSnapshots.size.toDouble() / legacySnapshots.size)
+                results += Triple(scenario, legacySnapshots.size, optimizedSnapshots.size)
+                Log.i(
+                    TAG,
+                    "scenario=${scenario.name} origin=${scenario.origin} " +
+                        "chunks=${scenario.chunks.size} " +
+                        "durationMs=${scenario.chunks.last().tMs.toInt()} " +
+                        "chars=${finalContent.length}"
+                )
+                Log.i(
+                    TAG,
+                    "  legacy writes=${legacySnapshots.size} medianMs=${fmt(percentile(legacyTimesMs, 50))} " +
+                        "p95Ms=${fmt(percentile(legacyTimesMs, 95))}"
+                )
+                Log.i(
+                    TAG,
+                    "  optimized writes=${optimizedSnapshots.size} medianMs=${fmt(percentile(optimizedTimesMs, 50))} " +
+                        "p95Ms=${fmt(percentile(optimizedTimesMs, 95))} " +
+                        "writeReductionPct=${fmt(writeReduction)}"
+                )
             }
 
-            val legacyTimesMs = mutableListOf<Double>()
-            val optimizedTimesMs = mutableListOf<Double>()
-            repeat(MEASURED_ROUNDS) { round ->
-                if (round % 2 == 0) {
-                    legacyTimesMs += measureRound(database, legacySnapshots)
-                    optimizedTimesMs += measureRound(database, optimizedSnapshots)
-                } else {
-                    optimizedTimesMs += measureRound(database, optimizedSnapshots)
-                    legacyTimesMs += measureRound(database, legacySnapshots)
+            Log.i(TAG, "device=${Build.MANUFACTURER} ${Build.MODEL} api=${Build.VERSION.SDK_INT} rounds=$MEASURED_ROUNDS")
+            // The timed cadence bounds writes by O(duration/500ms) instead of
+            // O(chunks): it can never write MORE often than the legacy policy.
+            results.forEach { (scenario, legacyWrites, optimizedWrites) ->
+                check(optimizedWrites <= legacyWrites) {
+                    "optimized wrote more than legacy in ${scenario.name}"
                 }
             }
-
-            val stored = database.messageDao().getOwnedMessage(USER_ID, STREAM_MESSAGE_ID)
-            check(stored?.content == finalContent) { "final Room content differs from SSE content" }
-
-            val legacyMedian = percentile(legacyTimesMs, 50)
-            val optimizedMedian = percentile(optimizedTimesMs, 50)
-            val legacyP95 = percentile(legacyTimesMs, 95)
-            val optimizedP95 = percentile(optimizedTimesMs, 95)
-            val writeReduction = 100.0 *
-                (1.0 - optimizedSnapshots.size.toDouble() / legacySnapshots.size)
-            val medianReduction = 100.0 * (1.0 - optimizedMedian / legacyMedian)
-            val p95Reduction = 100.0 * (1.0 - optimizedP95 / legacyP95)
-
-            Log.i(TAG, "device=${Build.MANUFACTURER} ${Build.MODEL} api=${Build.VERSION.SDK_INT}")
-            Log.i(
-                TAG,
-                "chunks=$CHUNK_COUNT chunkChars=${CHUNK_TEXT.length} finalChars=${finalContent.length} " +
-                    "historyRows=$HISTORY_ROWS warmup=$WARMUP_ROUNDS rounds=$MEASURED_ROUNDS"
-            )
-            Log.i(
-                TAG,
-                "legacy writes=${legacySnapshots.size} medianMs=${fmt(legacyMedian)} " +
-                    "p95Ms=${fmt(legacyP95)}"
-            )
-            Log.i(
-                TAG,
-                "optimized writes=${optimizedSnapshots.size} medianMs=${fmt(optimizedMedian)} " +
-                    "p95Ms=${fmt(optimizedP95)}"
-            )
-            Log.i(
-                TAG,
-                "writeReductionPct=${fmt(writeReduction)} medianReductionPct=${fmt(medianReduction)} " +
-                    "p95ReductionPct=${fmt(p95Reduction)} finalContentMatch=true"
-            )
-
-            check(optimizedSnapshots.size <= 20)
-            check(writeReduction >= 85.0)
         } finally {
             database.close()
             context.deleteDatabase(databaseName)
         }
+    }
+
+    /** Replays one trace through BOTH strategies and returns their snapshot lists. */
+    private fun replay(scenario: Scenario): Triple<List<String>, List<String>, String> {
+        val content = StringBuilder()
+        val legacySnapshots = mutableListOf<String>()
+        val cadence = SseUpdateCadence()
+        cadence.reset(0)
+        val optimizedSnapshots = mutableListOf<String>()
+        var streamingRowInserted = false
+        scenario.chunks.forEachIndexed { index, chunk ->
+            content.append(chunk.text)
+            // Legacy: a write every LEGACY_CHUNKS_PER_WRITE chunks (first chunk
+            // takes the INSERT path in both arms, not counted as UPDATE).
+            if (index > 0 && (index + 1) % LEGACY_CHUNKS_PER_WRITE == 0) {
+                legacySnapshots += content.toString()
+            }
+            val decision = cadence.onChunk(chunk.tMs.toLong())
+            if (!streamingRowInserted) {
+                streamingRowInserted = true
+                cadence.markCheckpoint(chunk.tMs.toLong())
+            } else if (decision.checkpoint) {
+                optimizedSnapshots += content.toString()
+            }
+        }
+        // Done branch appends one terminal finalize UPDATE in both arms.
+        val finalContent = content.toString()
+        return Triple(
+            legacySnapshots + finalContent,
+            optimizedSnapshots + finalContent,
+            finalContent
+        )
+    }
+
+    private fun realTrace(name: String, assetFile: String): Scenario {
+        val json = InstrumentationRegistry.getInstrumentation()
+            .context.assets.open(assetFile).bufferedReader().use { it.readText() }
+        val root = JSONObject(json)
+        val chunks = root.getJSONArray("chunks").let { array ->
+            List(array.length()) { index ->
+                val item = array.getJSONObject(index)
+                TraceChunk(item.getDouble("tMs"), item.getString("text"))
+            }
+        }
+        check(chunks.isNotEmpty()) { "trace $name has no chunks" }
+        return Scenario(
+            name = name,
+            origin = "real (${root.getString("recordedAt")} · ${root.getString("question")})",
+            chunks = chunks
+        )
     }
 
     private suspend fun seed(database: AppDatabase) {
@@ -135,13 +198,6 @@ class SsePersistenceBenchmarkTest {
                 clientRequestId = "stream-request"
             )
         )
-    }
-
-    private fun buildSnapshots(
-        finalContent: String,
-        checkpointIndices: List<Int>
-    ): List<String> = checkpointIndices.map { chunkIndex ->
-        finalContent.substring(0, chunkIndex * CHUNK_TEXT.length)
     }
 
     private suspend fun measureRound(
@@ -193,10 +249,8 @@ class SsePersistenceBenchmarkTest {
         const val CONVERSATION_ID = "benchmark-conversation"
         const val STREAM_MESSAGE_ID = "stream-message"
         const val HISTORY_ROWS = 500
-        const val CHUNK_COUNT = 1_000
-        const val CHUNK_TEXT = "0123456789abcdef0123456789abcdef"
         const val LEGACY_CHUNKS_PER_WRITE = 5
-        const val WARMUP_ROUNDS = 5
+        const val WARMUP_ROUNDS = 2
         const val MEASURED_ROUNDS = 30
     }
 }

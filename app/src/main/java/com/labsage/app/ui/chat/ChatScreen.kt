@@ -42,6 +42,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
 import com.labsage.app.LabSageApplication
 import com.labsage.app.R
+import com.labsage.app.domain.model.MessageReference
 import com.labsage.app.domain.model.QuickAction
 import com.labsage.app.domain.model.StreamState
 import com.labsage.app.ui.chat.components.*
@@ -73,6 +74,12 @@ fun ChatScreen(
     val settings by app.appSettings.collectAsStateWithLifecycle()
 
     var inputText by remember { mutableStateOf("") }
+    // Citation detail sheet. The open-citation lambda is remembered so that
+    // MessageBubble receives a stable reference and stays skippable.
+    var citationSheet by remember { mutableStateOf<MessageReference?>(null) }
+    val openCitation = remember<(MessageReference) -> Unit> {
+        { citation -> citationSheet = citation }
+    }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     val isStreaming by remember { derivedStateOf { streamState is StreamState.Streaming } }
@@ -335,7 +342,9 @@ fun ChatScreen(
                                     traceLines
                                 } else {
                                     emptyList()
-                                }
+                                },
+                                citations = msg.citations,
+                                onCitationClick = openCitation
                             )
                             DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                                 DropdownMenuItem(text = { Text(stringResource(R.string.copy_message)) }, leadingIcon = { Icon(Icons.Default.ContentCopy, null) }, onClick = {
@@ -468,6 +477,14 @@ fun ChatScreen(
             onDeleteFact = viewModel::deleteSessionFact,
             onClearError = viewModel::clearSessionContextError
         )
+    }
+
+    // Citation detail — chunk metadata of the tapped reference chip.
+    val citation = citationSheet
+    if (citation != null) {
+        ModalBottomSheet(onDismissRequest = { citationSheet = null }) {
+            CitationDetailSheetContent(citation)
+        }
     }
 }
 

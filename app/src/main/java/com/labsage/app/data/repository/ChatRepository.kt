@@ -2,7 +2,9 @@ package com.labsage.app.data.repository
 
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.labsage.app.BuildConfig
 import com.labsage.app.LabSageApplication
+import com.labsage.app.crash.CrashReporter
 import com.labsage.app.data.auth.AuthenticationState
 import com.labsage.app.data.local.AppDatabase
 import com.labsage.app.data.local.dao.ConversationDao
@@ -20,6 +22,7 @@ import com.labsage.app.data.sync.LegacyImportBinding
 import com.labsage.app.data.sync.LegacyImportLocalSource
 import com.labsage.app.data.sync.LegacyImportRemoteSource
 import com.labsage.app.data.sync.RoomHistorySyncStore
+import com.labsage.app.domain.model.ReferencesCodec
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -482,8 +485,13 @@ class ChatRepository(
     }
 
     /** Mark a streamed message as complete */
-    suspend fun finalizeAssistantMessage(messageId: String, content: String, route: String?) {
-        messageDao.finalizeMessage(currentUserId(), messageId, content, route)
+    suspend fun finalizeAssistantMessage(
+        messageId: String,
+        content: String,
+        route: String?,
+        referencesJson: String? = null
+    ) {
+        messageDao.finalizeMessage(currentUserId(), messageId, content, route, referencesJson)
     }
 
     suspend fun adoptServerMessageIdentity(localId: String, event: SseEvent.Done) {
@@ -514,10 +522,31 @@ class ChatRepository(
                 originalQuestion = question,
                 clientRequestId = clientRequestId,
                 syncVersion = event.syncVersion,
-                serverUpdatedAt = event.updatedAt
+                serverUpdatedAt = event.updatedAt,
+                referencesJson = ReferencesCodec.encode(event.references)
             )
         )
     }
+
+    /** Uploads persisted crash reports from previous sessions (best effort). */
+    suspend fun uploadPendingCrashReports(): Int =
+        CrashReporter.uploadPending(app.filesDir, BuildConfig.VERSION_NAME) { report ->
+            val response = runCatching {
+                app.api.reportCrash(
+                    CrashReportRequest(
+                        occurredAt = report.occurredAt,
+                        appVersion = report.appVersion,
+                        deviceModel = report.deviceModel,
+                        androidVersion = report.androidVersion,
+                        threadName = report.threadName,
+                        exceptionClass = report.exceptionClass,
+                        message = report.message,
+                        stackTrace = report.stackTrace
+                    )
+                )
+            }
+            response.getOrNull()?.data?.ok == true
+        }
 
     suspend fun upsertConversation(conversationId: String, title: String) {
         val binding = currentLegacyImportBinding()

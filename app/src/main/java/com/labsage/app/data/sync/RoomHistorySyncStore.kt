@@ -10,6 +10,8 @@ import com.labsage.app.data.remote.LegacyConversationDto
 import com.labsage.app.data.remote.LegacyImportRequest
 import com.labsage.app.data.remote.LegacyMessageDto
 import com.labsage.app.data.remote.MessageDto
+import com.labsage.app.domain.model.ReferencesCodec
+import com.labsage.app.domain.model.toReference
 
 class RoomHistorySyncStore(
     private val database: AppDatabase
@@ -247,7 +249,23 @@ class RoomHistorySyncStore(
                 else -> null // Preserve local chunks until Continue/Done adopts the ID.
             }
         }
-        dao.upsertAll(safeRemote.map { it.toEntity() })
+        // A backend that predates citations omits the `references` field
+        // entirely (null ≠ empty list). @Upsert replaces whole rows, so a
+        // null would erase the citations persisted locally by the done event.
+        // Keep the local snapshot for exactly those rows.
+        val idsWithoutServerReferences = safeRemote.filter { it.references == null }.map { it.id }
+        val localReferencesById = idsWithoutServerReferences
+            .chunked(SQLITE_SAFE_BATCH_SIZE)
+            .flatMap { dao.getReferencesJsonByIds(userId, it) }
+            .associate { it.id to it.referencesJson }
+        dao.upsertAll(safeRemote.map { message ->
+            val entity = message.toEntity()
+            if (message.references == null) {
+                entity.copy(referencesJson = localReferencesById[message.id])
+            } else {
+                entity
+            }
+        })
     }
 
     private fun ConversationDto.toEntity(userId: String, serverKey: String) = ConversationEntity(
@@ -278,7 +296,10 @@ class RoomHistorySyncStore(
         clientCreatedAt = clientCreatedAt,
         syncVersion = syncVersion,
         serverUpdatedAt = updatedAt,
-        isDeleted = false
+        isDeleted = false,
+        referencesJson = ReferencesCodec.encode(
+            references?.map { it.toReference() }.orEmpty()
+        )
     )
 
     private fun MessageEntity.normalizedForLegacyImport(): MessageEntity = when {
