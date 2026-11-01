@@ -1,5 +1,3 @@
-<!-- TODO: 把下方两处 YOUR_GITHUB_USERNAME 替换为你的 GitHub 用户名（推送后徽章才会显示） -->
-
 <div align="center">
 
 # LabSage · 实验室 AI 知识助手 Android 客户端
@@ -8,7 +6,7 @@
 
 支持 **AI 流式问答 · 异常状态恢复 · 工具调用过程可视化 · 账号认证 · 历史同步**
 
-[![CI](https://github.com/YOUR_GITHUB_USERNAME/LabSage/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_GITHUB_USERNAME/LabSage/actions/workflows/ci.yml)
+[![CI](https://github.com/teletubbyies/LabSage/actions/workflows/ci.yml/badge.svg)](https://github.com/teletubbyies/LabSage/actions/workflows/ci.yml)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.2-7F52FF?logo=kotlin&logoColor=white)
 ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white)
 ![minSdk](https://img.shields.io/badge/minSdk-24-green?logo=android&logoColor=white)
