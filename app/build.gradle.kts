@@ -27,11 +27,15 @@ android {
         release {
             // TODO: replace with the real production address before shipping.
             buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:6872/\"")
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Debug-signed so the minified build is installable for smoke
+            // tests; swap in the release keystore before publishing.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
@@ -89,6 +93,9 @@ dependencies {
 
     // Markdown rendering — jeziellago/compose-markdown
     implementation(libs.markdown.renderer)
+
+    // Baseline profile: add androidx.profileinstaller once generated in a
+    // networked environment (see benchmark/ module + docs/PERF_BASELINE.md).
 
     // Leak detection (debug builds only — ships no code in release via ContentProvider auto-init)
     debugImplementation(libs.leakcanary)
