@@ -23,3 +23,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "LabSage"
 include(":app")
+// Baseline-profile module — enable in a networked environment to generate
+// the profile (see benchmark/README note in docs/PERF_BASELINE.md).
+// include(":benchmark")
