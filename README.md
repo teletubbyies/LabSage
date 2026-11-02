@@ -2,15 +2,15 @@
 
 # LabSage · 实验室 AI 知识助手 Android 客户端
 
-面向实验室知识检索与环境查询场景，对接 Agent 服务（Go · ReAct · SSE 流式）的原生 Android 客户端。
+面向实验室知识检索与服务器环境查询场景，对接 Agent 服务（Go · ReAct · SSE 流式）的原生 Android 客户端。
 
-支持 **AI 流式问答 · 异常状态恢复 · 工具调用过程可视化 · 账号认证 · 历史同步**
+支持 **AI 流式问答 · 工具调用过程可视化 · 异常状态恢复 · 账号认证 · 历史同步 · 流式上传**
 
 [![CI](https://github.com/teletubbyies/LabSage/actions/workflows/ci.yml/badge.svg)](https://github.com/teletubbyies/LabSage/actions/workflows/ci.yml)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.2-7F52FF?logo=kotlin&logoColor=white)
 ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white)
 ![minSdk](https://img.shields.io/badge/minSdk-24-green?logo=android&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-64%20unit%20%2B%2042%20instrumented-0F766E)
+![Tests](https://img.shields.io/badge/tests-70%20unit%20%2B%2042%20instrumented-0F766E)
 
 <img src="docs/assets/demo.svg" width="300" alt="流式问答与断点续传演示动画">
 
@@ -22,43 +22,96 @@
 
 ## 核心亮点
 
+> 本节讲设计取舍（为什么这样做）。数据如何流转见[核心管线](#核心管线)，实测数字统一收录在[数据与实测](#数据与实测)。
+
 ### 1 · 架构与状态建模
 
 Kotlin + Jetpack Compose，**MVVM + Repository** 分离 UI、网络与数据层；用 **StateFlow + 密封类**建模 `Idle / Streaming / Completed / Error` 流式回答生命周期。Room 是唯一数据源——流式期间切换为内存快照并暂停 Room 观察，终态后恢复冷 Flow 做一次权威对账，全程单向数据流。
 
 > [`ChatViewModel.kt`](app/src/main/java/com/labsage/app/ui/chat/ChatViewModel.kt) · [`StreamState.kt`](app/src/main/java/com/labsage/app/domain/model/StreamState.kt)
 
-### 2 · SSE 背压保护
+### 2 · SSE 背压保护与双通道节流
 
-工具查询会突发 200+ 条 trace/message 事件。trace 按结构化前缀（`[tool] [react] [route]`）过滤后，进入**固定 512 容量的有界缓冲**；消费端跟不上时**取消连接并显式报错**——以失败代替无界堆积与静默丢失。
+工具查询会突发 200+ 条 trace/message 事件。trace 按结构化前缀（`[tool] [react] [route]`）过滤后进入**固定 512 容量的有界缓冲**；消费端跟不上时**取消连接并显式报错**——以失败代替无界堆积与静默丢失。
 
-> [`OkHttpSseDataSource.kt`](app/src/main/java/com/labsage/app/data/remote/OkHttpSseDataSource.kt)（`callbackFlow + awaitClose` 桥接 `EventSourceListener`）
+正文在内存顺序累积，**UI 发布（50 ms）与 Room 落盘（500 ms）分通道节流**：前者保证视觉连续，后者控制写放大；收到 `done / error` 终态立即落盘，不等节流窗口。相比旧「每 5 chunk 一写」策略，持久化次数降低一个数量级。
 
-### 3 · 流式链路优化与异常恢复
+> [`OkHttpSseDataSource.kt`](app/src/main/java/com/labsage/app/data/remote/OkHttpSseDataSource.kt)（`callbackFlow + awaitClose` 桥接 `EventSourceListener`）· [`SseUpdateCadence.kt`](app/src/main/java/com/labsage/app/ui/chat/SseUpdateCadence.kt) · [50/500 ms 决策依据](docs/CADENCE_DECISION_SPACE.md)
 
-正文在内存（`StringBuilder`）顺序累积，**UI 发布（50 ms）与 Room 落盘（500 ms）分通道节流**；收到 `done / error` 终态立即落盘，不等节流窗口。进程重启后从 Room 读到 `is_partial = 1` 的残缺正文，**继续生成 = `Continue + PartialAnswer`**，服务端不重复落库。以旧「每 5 chunk 一写」为基线回放**真实录制的 SSE trace**，写入次数降低 **82%–97%**（直答 −81.8%，工具查询簇发 −97.1%）。
+### 3 · 异常恢复：断点续传 + 崩溃闭环
 
-> [`SseUpdateCadence.kt`](app/src/main/java/com/labsage/app/ui/chat/SseUpdateCadence.kt) · [`ChatRecovery.kt`](app/src/main/java/com/labsage/app/ui/chat/ChatRecovery.kt) · [实测报告](docs/SSE_CADENCE_GRID_REPORT.md)
+进程重启后从 Room 读到 `is_partial = 1` 的残缺正文，**继续生成 = `Continue + PartialAnswer`**：服务端基于残缺文本续写、不重复落库，用户不必从头再问。
+
+崩溃上报采用**先落盘、下次启动再上传**的两段式设计——崩溃进程内不发起网络请求，上报不依赖崩溃现场的网络与进程存活。
+
+> [`ChatRecovery.kt`](app/src/main/java/com/labsage/app/ui/chat/ChatRecovery.kt) · [`CrashReporter.kt`](app/src/main/java/com/labsage/app/crash/CrashReporter.kt)
 
 ### 4 · 认证与历史同步
 
-登录态以 **Android Keystore + AES-GCM** 加密存储；历史**按账号隔离**缓存于 Room（`owner_user_id`），服务端 → 端上**游标增量拉取**，同步结果与游标在**同一事务**提交——崩溃后不重复拉取。
+登录态以 **Android Keystore + AES-GCM** 加密存储，密钥不出安全硬件；历史**按账号隔离**缓存于 Room（`owner_user_id`），服务端 → 端上**游标增量拉取**，页数据与游标在**同一事务**提交——崩溃后不重复拉取。
 
 > [`KeystoreAuthSessionStore.kt`](app/src/main/java/com/labsage/app/data/auth/KeystoreAuthSessionStore.kt) · [`HistorySyncCoordinator.kt`](app/src/main/java/com/labsage/app/data/sync/HistorySyncCoordinator.kt) · [`RoomHistorySyncStore.kt`](app/src/main/java/com/labsage/app/data/sync/RoomHistorySyncStore.kt)
 
+### 5 · 流式上传
+
+文件以 **8 KiB 缓冲循环**写入请求体，配合**长度探测**生成可重放的 `RequestBody`，全程无整文件驻留内存——堆内存增量不再随文件大小增长。
+
+> [`StreamingRequestBody.kt`](app/src/main/java/com/labsage/app/data/remote/StreamingRequestBody.kt) · [上传基准报告](docs/UPLOAD_BENCHMARK.md)
+
 ---
 
-## 流式链路
+## 核心管线
+
+> 本节只讲数据怎么流；设计理由见[核心亮点](#核心亮点)。
+
+### 流式回答
 
 事件从 Agent 服务出发，逐级沉淀到 Room；左侧回环是断点续传：
 
-<img src="docs/assets/pipeline.svg" alt="SSE 流式回答链路：级联结构" width="880">
+<img src="docs/assets/pipeline-stream.svg" alt="SSE 流式回答管线：INGEST → CONSUME → ROOM 三级，双通道节流与断点续传回环">
 
-- **级联主体**：Agent SSE → EventSource（`callbackFlow`）→ 有界缓冲 512 → 内存累积 → 分两路按各自节奏消费（UI 50 ms / Room 500 ms）。
-- **底座**：Room 是唯一数据源，承载重启恢复与断点续传。
-- **数据**：写入降幅来自真实后端 trace 录制回放（`scripts/record_sse_trace.py` 录制 → 模拟器 30 轮 A/B），基线是旧「每 5 chunk 一写」策略；高密度合成负载下为 −90.05%，详见[报告](docs/SSE_CADENCE_GRID_REPORT.md)。
+- **INGEST**：Agent SSE → EventSource（`callbackFlow`）→ trace 前缀过滤 → 有界缓冲 512。
+- **CONSUME**：`StringBuilder` 内存累积 → 分两路按各自节奏消费（UI 50 ms / Room 500 ms）。
+- **ROOM**：唯一数据源；重启后从这里读回残缺正文，形成左侧回环。
+
+### 历史同步
+
+游标增量拉取；页数据与游标在同一 Room 事务提交：
+
+<img src="docs/assets/pipeline-sync.svg" alt="历史同步管线：cursor 增量 + 同事务提交">
+
+### 认证会话
+
+Keystore 加密存储登录态；Bearer 拦截器统一注入，401 一次性刷新后重放原请求：
+
+<img src="docs/assets/pipeline-auth.svg" alt="认证会话管线：Keystore AES-GCM 加密存储 + Bearer 拦截与 401 刷新">
+
+### 流式上传
+
+8 KiB 缓冲循环写入，长度探测使请求体可重放：
+
+<img src="docs/assets/pipeline-upload.svg" alt="流式上传管线：可重放请求体 + 长度探测">
+
+### 崩溃闭环
+
+捕获 → 落盘 pending → 下次启动上传 → 后端聚合：
+
+<img src="docs/assets/pipeline-crash.svg" alt="崩溃上报管线：落盘 pending → 次启上传">
 
 ---
+
+## 数据与实测
+
+| 指标 | 结果 | 依据 |
+|---|---|---|
+| SSE 期间 Room 持久化次数 | 真实 trace 回放 **−81.8%（直答）/ −97.1%（工具查询簇发）**；高密度合成负载 202 → 21（−90.05%） | [参数网格与真实 trace 报告](docs/SSE_CADENCE_GRID_REPORT.md) |
+| 文件上传堆内存增量中位数 | **−98.7% ~ −99.1%**（180 样本 A/B，SHA-256 校验输出一致） | [上传基准报告](docs/UPLOAD_BENCHMARK.md) |
+| 包体积（R8 + resource shrink） | **20.83 → 2.58 MB（−87.6%）** | [`app/build.gradle.kts`](app/build.gradle.kts) |
+| 冷启动（模拟器 ×10 中位） | **408 → 304 ms（−25.5%）**，全量 AOT 编译上界 | [`StartupBenchmark.kt`](benchmark/src/main/java/com/labsage/benchmark/StartupBenchmark.kt) |
+| 崩溃闭环 | 捕获 → 落盘 → 下次启动上报 → 后端聚合，端到端实测 | [`CrashReporter.kt`](app/src/main/java/com/labsage/app/crash/CrashReporter.kt) |
+| 测试 | 70 单元测试 + 42 仪器测试（含真实 trace 回放基准），CI 每次推送运行 | [ci.yml](.github/workflows/ci.yml) |
+
+<sub>SSE 写入基线为旧「每 5 chunk 一写」策略；真实 trace 由 <code>scripts/record_sse_trace.py</code> 从后端录制，在模拟器回放 30 轮 A/B。</sub>
 
 ## 技术栈
 
@@ -70,17 +123,6 @@ Kotlin + Jetpack Compose，**MVVM + Repository** 分离 UI、网络与数据层�
 | 持久化 | Room 2.7（含迁移测试）· Preferences DataStore · Android Keystore |
 | 架构 | MVVM + Repository + 手动 DI（依赖图简单，透明可调试） |
 | 质量 | JUnit + MockWebServer · 仪器测试与基准 · LeakCanary · GitHub Actions |
-
-## 数据与实测
-
-| 指标 | 结果 | 依据 |
-|---|---|---|
-| SSE 期间 Room 持久化次数 | 真实 trace 回放 **−81.8%（直答）/ −97.1%（工具查询簇发）**；高密度合成负载 202 → 21（−90.05%） | [参数网格与真实 trace 报告](docs/SSE_CADENCE_GRID_REPORT.md) |
-| 文件上传堆内存增量中位数 | **−98.7% ~ −99.1%**（180 样本 A/B，SHA-256 校验输出一致） | [上传基准报告](docs/UPLOAD_BENCHMARK.md) |
-| 包体积（R8 + resource shrink） | **20.83 → 2.58 MB（−87.6%）** | [`app/build.gradle.kts`](app/build.gradle.kts) |
-| 冷启动（模拟器 ×10 中位） | 408 ms → AOT 上界 **304 ms（−25.5%）**，BP 待生成 | [`StartupBenchmark.kt`](benchmark/src/main/java/com/labsage/benchmark/StartupBenchmark.kt) |
-| 崩溃闭环 | 捕获→落盘→下次启动上报→后端聚合，端到端实测 | [`CrashReporter.kt`](app/src/main/java/com/labsage/app/crash/CrashReporter.kt) |
-| 测试 | 70 单元测试 + 41 仪器测试（含真实 trace 回放基准），CI 每次推送运行 | [ci.yml](.github/workflows/ci.yml) |
 
 ## 快速开始
 
@@ -102,7 +144,7 @@ Kotlin + Jetpack Compose，**MVVM + Repository** 分离 UI、网络与数据层�
 |---|---|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 整体架构、SSE 协议、Room 表设计、关键决策 |
 | [CADENCE_DECISION_SPACE.md](docs/CADENCE_DECISION_SPACE.md) | 50/500 ms 的四维度决策证据（视觉连续性 / 调度 / 写入 / 崩溃丢失） |
-| [SSE_CADENCE_GRID_REPORT.md](docs/SSE_CADENCE_GRID_REPORT.md) | 50/500 ms 参数网格实测 + 真实 trace 复现（−82%~−97%） |
+| [SSE_CADENCE_GRID_REPORT.md](docs/SSE_CADENCE_GRID_REPORT.md) | 50/500 ms 参数网格实测 + 真实 trace 复现（−81.8% / −97.1%） |
 | [UPLOAD_BENCHMARK.md](docs/UPLOAD_BENCHMARK.md) | 流式上传 A/B 实验（180 样本） |
 
 </details>
@@ -113,13 +155,14 @@ Kotlin + Jetpack Compose，**MVVM + Repository** 分离 UI、网络与数据层�
 ```text
 com.labsage.app/
 ├── data/
-│   ├── remote/    # OkHttp SSE 数据源、Retrofit API、请求模型
+│   ├── remote/    # OkHttp SSE 数据源、Retrofit API、请求模型、流式请求体
 │   ├── local/     # Room 数据库、实体、DAO、迁移
 │   ├── sync/      # 历史同步协调器、游标存储（同事务提交）
 │   ├── auth/      # 认证仓库、Keystore 加密会话存储
 │   └── repository/# ChatRepository / SettingsRepository
 ├── domain/model/  # StreamState 流式状态机
 ├── ui/            # Compose 界面：chat / conversation / files / settings / auth
+├── crash/         # 崩溃捕获、落盘与次启上报
 └── notification/  # 回答完成通知与深链定位
 ```
 
@@ -128,5 +171,5 @@ com.labsage.app/
 ---
 
 <div align="center">
-<sub>Android 客户端独立完成；Agent 服务端为对接的现有 Go 后端（不在本仓库内）。</sub>
+<sub>本仓库仅包含 Android 客户端；Agent 服务为对接的现有 Go 后端，不在本仓库内。</sub>
 </div>
