@@ -11,8 +11,7 @@ local.properties
 /app/build
 /benchmark/build
 
-# docs 白名单：只推送下列四份文档与 README 引用的 SVG，其余本地文档（学习笔记 / 面试稿 /
-# 排错记录 / 其他报告）一律留在本地。新增要公开的文档需在此显式 !取消忽略。
+# docs 白名单：只推送下列四份文档与 README 引用的 SVG，
 docs/*
 !docs/assets/
 docs/assets/*
@@ -20,4 +19,4 @@ docs/assets/*
 !docs/ARCHITECTURE.md
 !docs/SSE_CADENCE_GRID_REPORT.md
 !docs/CADENCE_DECISION_SPACE.md
-!docs/UPLOAD_BENCHMARK.md
+
