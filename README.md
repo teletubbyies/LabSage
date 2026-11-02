@@ -77,9 +77,9 @@ Kotlin + Jetpack Compose，**MVVM + Repository** 分离 UI、网络与数据层�
 |---|---|---|
 | SSE 期间 Room 持久化次数 | 真实 trace 回放 **−81.8%（直答）/ −97.1%（工具查询簇发）**；高密度合成负载 202 → 21（−90.05%） | [参数网格与真实 trace 报告](docs/SSE_CADENCE_GRID_REPORT.md) |
 | 文件上传堆内存增量中位数 | **−98.7% ~ −99.1%**（180 样本 A/B，SHA-256 校验输出一致） | [上传基准报告](docs/UPLOAD_BENCHMARK.md) |
-| 包体积（R8 + resource shrink） | **20.83 → 2.58 MB（−87.6%）** | [优化记录](docs/PERF_BASELINE.md) |
-| 冷启动（模拟器 ×10 中位） | 408 ms → AOT 上界 **304 ms（−25.5%）**，BP 待生成 | [优化记录](docs/PERF_BASELINE.md) |
-| 崩溃闭环 | 捕获→落盘→下次启动上报→后端聚合，端到端实测 | [优化记录](docs/PERF_BASELINE.md) |
+| 包体积（R8 + resource shrink） | **20.83 → 2.58 MB（−87.6%）** | [`app/build.gradle.kts`](app/build.gradle.kts) |
+| 冷启动（模拟器 ×10 中位） | 408 ms → AOT 上界 **304 ms（−25.5%）**，BP 待生成 | [`StartupBenchmark.kt`](benchmark/src/main/java/com/labsage/benchmark/StartupBenchmark.kt) |
+| 崩溃闭环 | 捕获→落盘→下次启动上报→后端聚合，端到端实测 | [`CrashReporter.kt`](app/src/main/java/com/labsage/app/crash/CrashReporter.kt) |
 | 测试 | 70 单元测试 + 41 仪器测试（含真实 trace 回放基准），CI 每次推送运行 | [ci.yml](.github/workflows/ci.yml) |
 
 ## 快速开始
@@ -96,7 +96,7 @@ Kotlin + Jetpack Compose，**MVVM + Repository** 分离 UI、网络与数据层�
 ## 附录
 
 <details>
-<summary><b>更多文档（架构 / 实测 / 排错 / 契约）</b></summary>
+<summary><b>更多文档（架构 / 实测）</b></summary>
 
 | 文档 | 内容 |
 |---|---|
@@ -104,8 +104,6 @@ Kotlin + Jetpack Compose，**MVVM + Repository** 分离 UI、网络与数据层�
 | [CADENCE_DECISION_SPACE.md](docs/CADENCE_DECISION_SPACE.md) | 50/500 ms 的四维度决策证据（视觉连续性 / 调度 / 写入 / 崩溃丢失） |
 | [SSE_CADENCE_GRID_REPORT.md](docs/SSE_CADENCE_GRID_REPORT.md) | 50/500 ms 参数网格实测 + 真实 trace 复现（−82%~−97%） |
 | [UPLOAD_BENCHMARK.md](docs/UPLOAD_BENCHMARK.md) | 流式上传 A/B 实验（180 样本） |
-| [BUGFIX_LOG.md](docs/BUGFIX_LOG.md) | 真实 Bug 复盘（背压丢事件、REPLACE 触发级联删除等） |
-| [CITATION_DESIGN.md](docs/CITATION_DESIGN.md) | 引用角标：方案选型、wire 契约、双端实现 |
 
 </details>
 
