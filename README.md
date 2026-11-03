@@ -31,9 +31,9 @@ Kotlin + Jetpack Compose，**MVVM + Repository** 分离 UI、网络与数据层�
 
 工具查询会突发 200+ 条 trace/message 事件。trace 按结构化前缀（`[tool] [react] [route]`）过滤后进入**固定 512 容量的有界缓冲**；消费端跟不上时**取消连接并显式报错**——以失败代替无界堆积与静默丢失。
 
-正文在内存顺序累积，**UI 发布（50 ms）与 Room 落盘（500 ms）分通道节流**：前者保证视觉连续，后者控制写放大；收到 `done / error` 终态立即落盘，不等节流窗口。相比旧「每 5 chunk 一写」策略，持久化次数降低一个数量级。
+正文在内存顺序累积，**UI 发布（50 ms）与 Room 落盘（500 ms）分通道节流**：前者保证视觉连续，后者控制写放大；收到 `done / error` 终态立即落盘，不等节流窗口。相比旧「每 5 chunk 一写」策略，真实 trace 回放写入次数 **−84.2%**：
 
-> [`OkHttpSseDataSource.kt`](app/src/main/java/com/labsage/app/data/remote/OkHttpSseDataSource.kt)（`callbackFlow + awaitClose` 桥接 `EventSourceListener`）· [`SseUpdateCadence.kt`](app/src/main/java/com/labsage/app/ui/chat/SseUpdateCadence.kt)
+> [`OkHttpSseDataSource.kt`](app/src/main/java/com/labsage/app/data/remote/OkHttpSseDataSource.kt)（`callbackFlow + awaitClose` 桥接 `EventSourceListener`）· [`SseUpdateCadence.kt`](app/src/main/java/com/labsage/app/ui/chat/SseUpdateCadence.kt) 
 
 ### 3 · 异常恢复：断点续传
 
@@ -75,6 +75,10 @@ Keystore 加密存储登录态；Bearer 拦截器统一注入，401 一次性刷
 <img src="docs/assets/pipeline-auth.svg" alt="认证会话管线：Keystore AES-GCM 加密存储 + Bearer 拦截与 401 刷新">
 
 ---
+
+### 真机演示
+
+<img src="docs/assets/sse_demo.gif"  alt="demo_real">
 
 ## 技术栈
 
