@@ -46,8 +46,9 @@ class CadenceDecisionSpaceTest {
     @Test
     fun decisionSpaceAcrossCandidateIntervals() {
         val scenarios = listOf(
-            trace("direct-real", "sse_trace_direct.json"),
-            trace("react-real", "sse_trace_react.json"),
+            trace("direct-long-real", "sse_trace_direct_long.json"),
+            trace("kb-long-real", "sse_trace_kb_long.json"),
+            trace("multi-tool-real", "sse_trace_multi_tool.json"),
             synthetic()
         )
 

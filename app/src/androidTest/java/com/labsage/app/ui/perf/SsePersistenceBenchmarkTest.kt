@@ -23,10 +23,11 @@ import kotlin.math.ceil
  * recorded SSE arrival traces (see scripts/record_sse_trace.py) plus one
  * synthetic high-density scenario for comparison with the grid report.
  *
- * Real traces matter because chunk arrival is far from uniform: the direct
- * trace has 216 ms stalls, the react trace arrives in near-zero-gap bursts.
- * Both arms replay the SAME trace, so the comparison isolates the cadence
- * policy from network/model behaviour.
+ * Real traces matter because chunk arrival is far from uniform: long answers
+ * stream for tens of seconds with 72% of chunks arriving in sub-millisecond
+ * bursts and 400 ms+ server-side stalls, while tool queries flush the whole
+ * body in a ~10 ms burst once tools finish. Both arms replay the SAME trace,
+ * so the comparison isolates the cadence policy from network/model behaviour.
  */
 @RunWith(AndroidJUnit4::class)
 class SsePersistenceBenchmarkTest {
@@ -48,8 +49,9 @@ class SsePersistenceBenchmarkTest {
         try {
             seed(database)
             val scenarios = listOf(
-                realTrace("direct", "sse_trace_direct.json"),
-                realTrace("react", "sse_trace_react.json"),
+                realTrace("direct-long", "sse_trace_direct_long.json"),
+                realTrace("kb-long", "sse_trace_kb_long.json"),
+                realTrace("multi-tool", "sse_trace_multi_tool.json"),
                 Scenario(
                     name = "synthetic-1000@10ms",
                     origin = "synthetic (grid-report load: 1000 chunks × 10 ms)",

@@ -11,12 +11,8 @@ local.properties
 /app/build
 /benchmark/build
 
-# docs 白名单：只推送下列四份文档与 README 引用的 SVG，
+# docs 白名单：只推送下列文档与 README 引用的 SVG，
 docs/*
 !docs/assets/
-docs/assets/*
-!docs/assets/*.svg
-!docs/ARCHITECTURE.md
-!docs/SSE_CADENCE_GRID_REPORT.md
-!docs/CADENCE_DECISION_SPACE.md
+
 
